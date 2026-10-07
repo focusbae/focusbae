@@ -1,0 +1,23 @@
+name: Feature request
+description: Suggest something FocusBae should do. For open-ended ideas, Discord is a better first stop.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe the situation, for example "after client calls I forget what I promised to send".
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like to happen?
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy
+      options:
+        - label: This works without sending anything off the Mac, or only with a setting the user turns on.

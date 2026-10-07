@@ -1,0 +1,92 @@
+# Node modules
+node_modules/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Environment variables
+.env
+.env.*.local
+
+# Electron build artifacts
+dist/
+out/
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage/
+
+# TypeScript
+*.tsbuildinfo
+
+# VS Code settings
+.vscode/
+
+# macOS
+.AppleDouble
+.LSOverride
+
+# Windows
+ehthumbs.db
+Desktop.ini
+
+# Linux
+*~
+
+# Electron forge or builder specific
+/.webpack/
+.cache/
+.release/
+*.dmg
+*.exe
+*.app
+*.deb
+*.rpm
+*.snap
+*.msi
+*.nupkg
+*.blockmap
+latest*.yml
+yarn.lock
+
+# Optional: If you use Electron Builder
+electron-builder.yaml
+electron-builder.json
+
+# Optional: If using native modules (bindings, node-gyp)
+build/Release/
+*.node
+/local-ai/bin/
+/meeting-capture/bin/
+
+# Optional: GitHub workflows (if generated)
+# .github/
+
+# Optional: Test results
+test-results/
+token.json
+
+
+# Data files
+clipboard_history.json
+focus_stats.json
+stats_backup.json
+
+# Consented real transcripts for extraction qualification; never commit
+/qualification/extraction/gold/private/
+/local-ai/fluid-helpers/.build/
+/qualification/speech/data/
+/qualification/speech/results/

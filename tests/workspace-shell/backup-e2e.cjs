@@ -1,0 +1,63 @@
+"use strict";
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+module.exports = async ({ app, page, output, profile, packaged, clickPage, recording }) => {
+  const original = (await page.evaluate(() => window.focusbaeWorkspace.bootstrap())).value.workspace;
+  const file = path.join(profile, "workspace.focusbae-backup");
+  await clickPage(page, "Settings");
+  const section = page.getByRole("region", { name: "Backup & recovery", exact: true });
+  await section.getByText("No backup recorded", { exact: true }).waitFor();
+  const invalid = await page.evaluate((workspaceId) => window.focusbaeWorkspace.backup.create({ workspaceId, path: "/tmp/not-authorized" }), original.id);
+  assert.equal(invalid.error.code, "INVALID_INPUT");
+  await app.evaluate(async () => {
+    for (const name of ["backup.status", "backup.create", "backup.restore"]) {
+      const result = await global.workspaceProbe.handlers.get(`workspace:${name}`)({ sender: {}, senderFrame: {} }, {});
+      if (result.error?.code !== "PERMISSION_DENIED") throw new Error(`${name} accepted a foreign sender`);
+    }
+  });
+  await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1 }); });
+  await section.getByRole("button", { name: "Create backup", exact: true }).click();
+  await page.waitForFunction(() => !document.querySelector('.backup-controls button')?.disabled);
+  assert.equal(fs.existsSync(file), false);
+  await app.evaluate(({ dialog }, file) => {
+    dialog.showMessageBox = async () => ({ response: 0 });
+    dialog.showSaveDialog = async () => ({ canceled: false, filePath: file });
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] });
+  }, file);
+  await section.getByRole("button", { name: "Create backup", exact: true }).click();
+  await section.getByRole("status").filter({ hasText: "Backup verified and saved" }).waitFor({ timeout: 60000 });
+  assert.ok(fs.statSync(file).size > 10000);
+  await section.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: path.join(output, `${packaged ? "packaged-" : ""}backup-settings.png`) });
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((win) => win.webContents.getURL().startsWith("focusbae-workspace:")).setContentSize(390, 844));
+  await page.waitForFunction(() => innerWidth === 390);
+  await section.scrollIntoViewIfNeeded();
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+  await page.screenshot({ path: path.join(output, `${packaged ? "packaged-" : ""}backup-narrow.png`) });
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((win) => win.webContents.getURL().startsWith("focusbae-workspace:")).setContentSize(1120, 760));
+  await page.waitForFunction(() => innerWidth === 1120);
+  await section.getByRole("button", { name: "Restore backup", exact: true }).click();
+  await section.getByRole("button", { name: "Open restored workspace" }).waitFor({ timeout: 60000 });
+  assert.equal((await page.evaluate(() => window.focusbaeWorkspace.bootstrap())).value.workspace.id, original.id);
+  await section.getByRole("button", { name: "Open restored workspace" }).click();
+  await page.getByRole("heading", { name: "Today", exact: true }).waitFor();
+  const restored = (await page.evaluate(() => window.focusbaeWorkspace.bootstrap())).value.workspace;
+  assert.notEqual(restored.id, original.id); assert.match(restored.name, /\(restored\)$/);
+  assert.equal(restored.preferences.theme, original.preferences.theme);
+  const audio = await page.evaluate(({ workspaceId, id }) => window.focusbaeWorkspace.capture.detail({ workspaceId, id }), { workspaceId: restored.id, id: recording.id });
+  assert.equal(audio.ok, true); assert.ok(audio.value.audio.bytes > 0);
+  await page.getByRole("textbox", { name: "Note body", exact: true }).waitFor();
+  assert.match(await page.getByRole("textbox", { name: "Note body", exact: true }).innerText(), /survives a reload and immediate quit/);
+  await page.getByLabel("Workspace", { exact: true }).selectOption(original.id);
+  await clickPage(page, "Settings");
+  await section.getByText(/workspace.focusbae-backup/).waitFor();
+  const corrupt = path.join(profile, "corrupt.focusbae-backup");
+  fs.writeFileSync(corrupt, fs.readFileSync(file).subarray(0, 200));
+  await app.evaluate(({ dialog }, file) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] }); }, corrupt);
+  const count = (await page.evaluate(() => window.focusbaeWorkspace.bootstrap())).value.workspaces.length;
+  await section.getByRole("button", { name: "Restore backup", exact: true }).click();
+  await section.getByRole("alert").waitFor();
+  assert.equal((await page.evaluate(() => window.focusbaeWorkspace.bootstrap())).value.workspaces.length, count);
+  await clickPage(page, "Today");
+};

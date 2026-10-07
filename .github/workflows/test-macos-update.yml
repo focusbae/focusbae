@@ -1,0 +1,61 @@
+name: Signed macOS in-place update QA
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  update-qa:
+    runs-on: macos-26
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: npm ci
+      - name: Build two Developer ID signed QA apps and install the newer one in place
+        env:
+          SIGNING_CERT_P12: ${{ secrets.SIGNING_CERT_P12 }}
+          SIGNING_CERT_P12_PASSWORD: ${{ secrets.SIGNING_CERT_P12_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          NOTARY_KEY: ${{ secrets.NOTARY_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = arm64
+          umask 077
+          export APPLE_API_KEY="$RUNNER_TEMP/focusbae-notary.p8"
+          export CSC_KEYCHAIN="$RUNNER_TEMP/focusbae-signing.keychain-db"
+          CERT_FILE="$RUNNER_TEMP/focusbae-signing.p12"
+          trap 'security delete-keychain "$CSC_KEYCHAIN"; rm -f "$APPLE_API_KEY" "$CERT_FILE"' EXIT
+          printf '%s' "$SIGNING_CERT_P12" | base64 --decode > "$CERT_FILE"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$CSC_KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$CSC_KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$CSC_KEYCHAIN"
+          security import "$CERT_FILE" -k "$CSC_KEYCHAIN" -P "$SIGNING_CERT_P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$CSC_KEYCHAIN"
+          security list-keychains -d user -s "$CSC_KEYCHAIN"
+          security find-identity -v -p codesigning "$CSC_KEYCHAIN" | grep -q 'Developer ID Application'
+          printf '%s' "$NOTARY_KEY" | base64 --decode > "$APPLE_API_KEY"
+          npm run build:workspace
+          npm pkg set version=1.3.1
+          FOCUSBAE_QA_UPDATE=1 ./node_modules/.bin/electron-builder --config scripts/release-candidate.config.cjs --mac --publish never
+          OLD_APP="out/release-update-qa/mac-arm64/FocusBae Update QA.app"
+          node scripts/audit-local-release.cjs "$OLD_APP"
+          codesign --verify --deep --strict "$OLD_APP"
+          mkdir -p "$RUNNER_TEMP/focusbae-qa-install"
+          cp -R "$OLD_APP" "$RUNNER_TEMP/focusbae-qa-install/FocusBae Update QA.app"
+          npm pkg set version=1.3.2
+          FOCUSBAE_QA_UPDATE=1 ./node_modules/.bin/electron-builder --config scripts/release-candidate.config.cjs --mac --publish never
+          NEW_APP="out/release-update-qa/mac-arm64/FocusBae Update QA.app"
+          node scripts/audit-local-release.cjs "$NEW_APP"
+          codesign --verify --deep --strict "$NEW_APP"
+          node scripts/qa-update-install.cjs "$RUNNER_TEMP/focusbae-qa-install/FocusBae Update QA.app" out/release-update-qa

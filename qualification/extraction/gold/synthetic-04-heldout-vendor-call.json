@@ -1,0 +1,23 @@
+{
+  "id": "synthetic-04-heldout-vendor-call",
+  "source": "synthetic",
+  "note": "Held-out probe written after the apple extractor prompt was tuned on 01-03; not used for tuning. Account owner is 'Me'.",
+  "accountOwner": "Me",
+  "segments": [
+    { "id": "s1", "speaker": "Anika", "text": "We reviewed your security questionnaire yesterday." },
+    { "id": "s2", "speaker": "Me", "text": "Thanks. We'll get the SOC report over to you once legal signs off." },
+    { "id": "s3", "speaker": "Anika", "text": "Okay. I can set up the sandbox account for your team this afternoon." },
+    { "id": "s4", "speaker": "Me", "text": "That would help. Honestly the rollout should go smoothly if the sandbox works." },
+    { "id": "s5", "speaker": "Tomas", "text": "Leave the pricing sheet with me, I'll have numbers for you on Tuesday." },
+    { "id": "s6", "speaker": "Anika", "text": "Our CEO is going to announce the new region next month." },
+    { "id": "s7", "speaker": "Me", "text": "Could someone send the invoice to finance?" },
+    { "id": "s8", "speaker": "Tomas", "text": "Not me, I'm out next week." },
+    { "id": "s9", "speaker": "Me", "text": "Fine, I'll handle the invoice myself." }
+  ],
+  "commitments": [
+    { "segmentId": "s2", "quote": "We'll get the SOC report over to you once legal signs off", "owner": "self" },
+    { "segmentId": "s3", "quote": "I can set up the sandbox account for your team this afternoon", "owner": "other" },
+    { "segmentId": "s5", "quote": "Leave the pricing sheet with me, I'll have numbers for you on Tuesday", "owner": "other" },
+    { "segmentId": "s9", "quote": "I'll handle the invoice myself", "owner": "self" }
+  ]
+}

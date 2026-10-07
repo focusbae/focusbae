@@ -1,0 +1,14 @@
+{
+  "id": "synthetic-03-shared-mic",
+  "source": "synthetic",
+  "note": "Hand-written probe. Two people on one microphone with no speaker labels — the case where source is not identity.",
+  "segments": [
+    { "id": "s1", "speaker": null, "text": "I'll book the venue for the workshop." },
+    { "id": "s2", "speaker": null, "text": "And I will send the invites once it's booked." },
+    { "id": "s3", "speaker": null, "text": "The keynote speaker said she will publish the slides next week." }
+  ],
+  "commitments": [
+    { "segmentId": "s1", "quote": "I'll book the venue for the workshop", "owner": "unknown" },
+    { "segmentId": "s2", "quote": "I will send the invites once it's booked", "owner": "unknown" }
+  ]
+}

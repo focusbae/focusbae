@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "module": "commonjs",
+    "target": "ES2020",
+    "checkJs": true,
+    "lib": ["ES2020", "DOM"],
+    "baseUrl": ".",
+    "paths": {
+      "@call-mode/*": ["call-mode/*"]
+    }
+  },
+  "include": [
+    "*.js",
+    "call-mode/**/*.js",
+    "scripts/**/*.js"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "build"
+  ]
+}

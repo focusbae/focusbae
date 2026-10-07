@@ -1,0 +1,21 @@
+{
+  "id": "synthetic-01-client-call",
+  "source": "synthetic",
+  "note": "Hand-written probe, not a real meeting. The account owner is 'Me'.",
+  "segments": [
+    { "id": "s1", "speaker": "Priya", "text": "Thanks for joining. The pilot numbers look good so far." },
+    { "id": "s2", "speaker": "Me", "text": "Great. I will send you the revised Q3 deck by Friday." },
+    { "id": "s3", "speaker": "Priya", "text": "Perfect. I'm going to loop in Raghav on the pricing question." },
+    { "id": "s4", "speaker": "Me", "text": "It will probably rain on Thursday so the offsite might move." },
+    { "id": "s5", "speaker": "Priya", "text": "Let me get back to you on the contract terms." },
+    { "id": "s6", "speaker": "Me", "text": "I think the market will grow next year anyway." },
+    { "id": "s7", "speaker": "Priya", "text": "Can you share the onboarding checklist before Monday?" },
+    { "id": "s8", "speaker": "Me", "text": "Sure, I'll do that tomorrow." }
+  ],
+  "commitments": [
+    { "segmentId": "s2", "quote": "I will send you the revised Q3 deck by Friday", "owner": "self" },
+    { "segmentId": "s3", "quote": "I'm going to loop in Raghav on the pricing question", "owner": "other" },
+    { "segmentId": "s5", "quote": "Let me get back to you on the contract terms", "owner": "other" },
+    { "segmentId": "s8", "quote": "I'll do that tomorrow", "owner": "self" }
+  ]
+}

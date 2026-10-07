@@ -1,0 +1,150 @@
+.graph-view {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  height: 100%;
+  padding: 14px 18px 18px;
+}
+.graph-controls {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.graph-controls label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+.graph-controls label.off {
+  opacity: 0.45;
+}
+.graph-controls input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+.graph-controls .dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.graph-controls .dot.note {
+  background: var(--graph-note);
+}
+.graph-controls .dot.person {
+  background: var(--graph-person);
+}
+.graph-controls .dot.recording {
+  background: var(--graph-recording);
+}
+.graph-controls .dot.action {
+  background: var(--graph-action);
+}
+/* The zoom controls stay together when the filters wrap onto a second row. */
+.graph-zoom {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+.graph-count {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.graph-canvas {
+  flex: 1;
+  min-height: 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--graph-ground);
+  overflow: hidden;
+}
+.graph-canvas svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.graph-edge {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+.graph-edge.mentions,
+.graph-edge.owns {
+  stroke: var(--graph-person);
+  stroke-width: 1.3;
+}
+.graph-edge.captured,
+.graph-edge.proposed {
+  stroke: var(--graph-recording);
+  stroke-dasharray: 3 3;
+}
+.graph-edge.faded,
+.graph-node.faded {
+  opacity: 0.16;
+}
+.graph-node {
+  cursor: pointer;
+}
+.graph-node circle {
+  fill: var(--graph-note);
+  stroke: var(--graph-ground);
+  stroke-width: 1.5;
+}
+.graph-node.person circle {
+  fill: var(--graph-person);
+}
+.graph-node.recording circle {
+  fill: var(--graph-recording);
+}
+.graph-node.action circle {
+  fill: var(--graph-action);
+}
+.graph-node text {
+  fill: var(--muted);
+  font-size: 13px;
+  text-anchor: middle;
+  pointer-events: none;
+}
+.graph-node:hover circle,
+.graph-node:focus-visible circle {
+  stroke: var(--accent);
+  stroke-width: 2.5;
+}
+.graph-node:hover text,
+.graph-node.current text {
+  fill: var(--text);
+  font-weight: 600;
+}
+.graph-node.current circle {
+  stroke: var(--accent);
+  stroke-width: 3;
+}
+.graph-node:focus {
+  outline: none;
+}
+.graph-empty,
+.graph-note {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 0;
+}
+.graph-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 0 40px;
+}
+.graph-empty code {
+  font-size: 12.5px;
+  background: var(--surface);
+  padding: 1px 5px;
+  border-radius: 4px;
+}

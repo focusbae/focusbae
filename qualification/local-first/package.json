@@ -1,0 +1,33 @@
+{
+  "name": "focusbae-local-first-qualification",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Isolated LF-00 dependency probe; never a production app",
+  "author": "FocusBae",
+  "main": "main.cjs",
+  "scripts": {
+    "setup:electron": "node scripts/install-electron.cjs",
+    "build": "vite build",
+    "test": "node scripts/run.cjs development",
+    "package": "node scripts/package.cjs",
+    "test:packaged": "node scripts/run.cjs packaged"
+  },
+  "dependencies": {
+    "@nut-tree-fork/nut-js": "4.2.6",
+    "@tiptap/core": "3.31.3",
+    "@tiptap/pm": "3.31.3",
+    "@tiptap/react": "3.31.3",
+    "@tiptap/starter-kit": "3.31.3",
+    "audiotee": "0.0.7",
+    "better-sqlite3": "13.0.3",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "sqlite-vec": "0.1.9"
+  },
+  "devDependencies": {
+    "electron": "43.7.0",
+    "electron-builder": "24.13.3",
+    "node": "24.21.0",
+    "vite": "8.3.0"
+  }
+}

@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <!-- Allow Electron to load unsigned helper/native libs (needed for many native modules) -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+
+    <!-- Allow V8/JIT if ever required (common in Electron apps with native modules) -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+
+    <!-- Allow unsigned executable memory (sometimes required by native add-ons or JIT) -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+
+    <!-- Allow setting DYLD env vars if needed by native libs -->
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+
+    <!-- Outgoing network access -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+
+    <!-- ✅ CORRECT: Allow sending Apple Events (required for osascript/AppleScript automation) -->
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
+
+    <!-- Microphone access for Call Mode voice conversations -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+
+    <!-- Screen recording/capture for Call Mode context awareness -->
+    <key>com.apple.security.device.screen-capture</key>
+    <true/>
+
+    <!--
+      Local meeting capture taps system audio output via the Core Audio process-tap
+      API (macOS 14.2+). macOS gates that behind the *screen* capture permission
+      class, not the microphone one, which is why NSAudioCaptureUsageDescription and
+      this entitlement are both required even though nothing here records video.
+      Without them the tap fails quietly and produces an empty transcript rather than
+      an error the user can act on.
+    -->
+    <key>com.apple.security.device.audio-capture</key>
+    <true/>
+  </dict>
+</plist>

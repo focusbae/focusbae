@@ -1,0 +1,38 @@
+name: CI
+
+# Runs on every pull request and on pushes to main and release branches.
+# It uses no secrets, so pull requests from forks are safe to run.
+on:
+  pull_request:
+  push:
+    branches: [main, "release/**"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      # Legacy electron-rebuild's node-gyp still imports distutils.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: npm ci
+      - name: Build Swift helpers and UI
+        run: npm run build:workspace
+      - name: Unit tests
+        run: npm test
+      - name: Release configuration tests
+        run: npm run test:release

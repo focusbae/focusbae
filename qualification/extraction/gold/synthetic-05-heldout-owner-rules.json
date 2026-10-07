@@ -1,0 +1,25 @@
+{
+  "id": "synthetic-05-heldout-owner-rules",
+  "source": "synthetic",
+  "note": "Held-out probe written after the owner-resolution rules were added (2026-09-17) and not used to tune them. Phrasings deliberately differ from the rule patterns. Account owner is 'Me'.",
+  "accountOwner": "Me",
+  "segments": [
+    { "id": "s1", "speaker": "Deepa", "text": "Nikhil's going to handle the investor deck this week." },
+    { "id": "s2", "speaker": "Me", "text": "Good. I'll ask Omar to review the contract before we sign." },
+    { "id": "s3", "speaker": "Omar", "text": "Could you send me the draft tonight?" },
+    { "id": "s4", "speaker": "Me", "text": "Sure, will do." },
+    { "id": "s5", "speaker": "Deepa", "text": "Let's have Omar check the numbers too." },
+    { "id": "s6", "speaker": "Omar", "text": "Fine, leave that to me." },
+    { "id": "s7", "speaker": "Me", "text": "My team will ship the login fix on Friday." },
+    { "id": "s8", "speaker": "Deepa", "text": "The auditors said they will send their report next month." },
+    { "id": "s9", "speaker": "Omar", "text": "Deepa is going to book the room for the offsite." }
+  ],
+  "commitments": [
+    { "segmentId": "s1", "quote": "Nikhil's going to handle the investor deck this week", "owner": "other" },
+    { "segmentId": "s2", "quote": "I'll ask Omar to review the contract before we sign", "owner": "self" },
+    { "segmentId": "s4", "quote": "Sure, will do", "owner": "self" },
+    { "segmentId": "s6", "quote": "Fine, leave that to me", "owner": "other" },
+    { "segmentId": "s7", "quote": "My team will ship the login fix on Friday", "owner": "self" },
+    { "segmentId": "s9", "quote": "Deepa is going to book the room for the offsite", "owner": "other" }
+  ]
+}

@@ -1,0 +1,110 @@
+.people-page {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+}
+.people-rows,
+.person-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.people-rows button {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 12px 4px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.people-rows button:hover,
+.people-rows button:focus-visible {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.person-initial {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  font:
+    15px/1 Georgia,
+    serif;
+}
+.person-row-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.person-row-copy small,
+.person-item-copy small {
+  color: var(--muted);
+  font-size: 12px;
+}
+.person-heading h2 {
+  font:
+    30px/1.2 Georgia,
+    serif;
+  margin: 4px 0;
+}
+.person-section .section-heading {
+  margin-bottom: 4px;
+}
+.person-empty {
+  margin: 0;
+  font-size: 13px;
+}
+.person-items li {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+.person-item-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  flex: 1 1 260px;
+}
+.person-item-copy q {
+  color: var(--muted);
+  font-style: italic;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.person-item-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.person-item-tools button:not(.icon-button) {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+}
+.people-blocked {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px 12px;
+  max-width: 420px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.people-blocked button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+}

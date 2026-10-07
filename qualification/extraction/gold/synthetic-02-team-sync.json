@@ -1,0 +1,19 @@
+{
+  "id": "synthetic-02-team-sync",
+  "source": "synthetic",
+  "note": "Hand-written probe, not a real meeting. Third-party assignments and negations.",
+  "segments": [
+    { "id": "s1", "speaker": "Me", "text": "Raghav will own the migration script this sprint." },
+    { "id": "s2", "speaker": "Raghav", "text": "Yes, I'll have a draft by Wednesday." },
+    { "id": "s3", "speaker": "Me", "text": "We don't need to redo the dashboard. The build will fail if we skip the lint step though." },
+    { "id": "s4", "speaker": "Maya", "text": "You should try the new pricing page sometime, it's nice." },
+    { "id": "s5", "speaker": "Maya", "text": "Action item for me: update the release notes." },
+    { "id": "s6", "speaker": "Me", "text": "I need to review Maya's release notes before we ship." }
+  ],
+  "commitments": [
+    { "segmentId": "s1", "quote": "Raghav will own the migration script this sprint", "owner": "other" },
+    { "segmentId": "s2", "quote": "I'll have a draft by Wednesday", "owner": "other" },
+    { "segmentId": "s5", "quote": "Action item for me: update the release notes", "owner": "other" },
+    { "segmentId": "s6", "quote": "I need to review Maya's release notes before we ship", "owner": "self" }
+  ]
+}

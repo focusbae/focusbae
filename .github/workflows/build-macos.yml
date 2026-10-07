@@ -1,0 +1,88 @@
+name: macOS release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mac-build:
+    # Signed builds run only from release branches (release/1.3, release/1.4, ...).
+    if: startsWith(github.ref, 'refs/heads/release/')
+    runs-on: macos-26
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      # Legacy electron-rebuild's node-gyp still imports distutils.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Require Apple Silicon runner and signing secrets
+        env:
+          CERT: ${{ secrets.SIGNING_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.SIGNING_CERT_P12_PASSWORD }}
+          NOTARY_KEY: ${{ secrets.NOTARY_KEY_P8 }}
+          NOTARY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = arm64
+          test -n "$CERT"
+          test -n "$CERT_PASSWORD"
+          test -n "$NOTARY_KEY"
+          test -n "$NOTARY_ID"
+          test -n "$NOTARY_ISSUER"
+      - run: npm ci
+      - name: Build signed and notarized candidate
+        env:
+          SIGNING_CERT_P12: ${{ secrets.SIGNING_CERT_P12 }}
+          SIGNING_CERT_P12_PASSWORD: ${{ secrets.SIGNING_CERT_P12_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          NOTARY_KEY: ${{ secrets.NOTARY_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          umask 077
+          export APPLE_API_KEY="$RUNNER_TEMP/focusbae-notary.p8"
+          export CSC_KEYCHAIN="$RUNNER_TEMP/focusbae-signing.keychain-db"
+          CERT_FILE="$RUNNER_TEMP/focusbae-signing.p12"
+          trap 'security delete-keychain "$CSC_KEYCHAIN"; rm -f "$APPLE_API_KEY" "$CERT_FILE"' EXIT
+          test -n "$KEYCHAIN_PASSWORD"
+          printf '%s' "$SIGNING_CERT_P12" | base64 --decode > "$CERT_FILE"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$CSC_KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$CSC_KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$CSC_KEYCHAIN"
+          security import "$CERT_FILE" -k "$CSC_KEYCHAIN" -P "$SIGNING_CERT_P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$CSC_KEYCHAIN"
+          security list-keychains -d user -s "$CSC_KEYCHAIN"
+          security find-identity -v -p codesigning "$CSC_KEYCHAIN" | grep -q 'Developer ID Application'
+          printf '%s' "$NOTARY_KEY" | base64 --decode > "$APPLE_API_KEY"
+          npm run build:workspace
+          ./node_modules/.bin/electron-builder --config scripts/release-candidate.config.cjs --mac --publish never
+          APP="out/release-signed/mac-arm64/FocusBae.app"
+          node scripts/audit-local-release.cjs "$APP"
+          ELECTRON_RUN_AS_NODE=1 "$APP/Contents/MacOS/FocusBae" scripts/probe-packaged-helpers.cjs "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          codesign -dvv "$APP" 2>&1 | grep 'Authority=Developer ID Application'
+          xcrun stapler validate "$APP"
+          spctl --assess --type execute --verbose=2 "$APP"
+      - name: Save candidate for manual qualification (not a public release)
+        uses: actions/upload-artifact@v4
+        with:
+          name: FocusBae-arm64-candidate
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            out/release-signed/*.dmg
+            out/release-signed/*.zip
+            out/release-signed/*.blockmap
+            out/release-signed/latest-mac.yml
+  qa-update:
+    if: github.ref == 'refs/heads/qa-update-install'
+    uses: ./.github/workflows/test-macos-update.yml
+    secrets: inherit

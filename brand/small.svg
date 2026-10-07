@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="16 16 224 224" fill="none"><defs>
+    <linearGradient id="forest" x1="40" y1="20" x2="211" y2="240" gradientUnits="userSpaceOnUse"><stop stop-color="#426c55"/><stop offset=".48" stop-color="#295742"/><stop offset="1" stop-color="#183d2d"/></linearGradient>
+    <linearGradient id="ivory" x2=".4" y2="1"><stop stop-color="#fffdf2"/><stop offset="1" stop-color="#e4e4ce"/></linearGradient>
+    <linearGradient id="sage" x1="0" y1="0" x2=".8" y2="1"><stop stop-color="#e0e6d4"/><stop offset="1" stop-color="#a9bca2"/></linearGradient>
+    <linearGradient id="edge" x2=".5" y2="1"><stop stop-color="#fff" stop-opacity=".3"/><stop offset=".55" stop-color="#fff" stop-opacity=".02"/><stop offset="1" stop-color="#000" stop-opacity=".12"/></linearGradient>
+    <filter id="relief" x="-30%" y="-20%" width="160%" height="150%"><feDropShadow dx="0" dy="2" stdDeviation="1.2" flood-color="#0b271b" flood-opacity=".4"/></filter>
+    <filter id="impression" x="-30%" y="-20%" width="160%" height="150%"><feDropShadow dx="0" dy="1.5" stdDeviation=".4" flood-color="#faffee" flood-opacity=".85"/></filter>
+  </defs><rect x="16" y="16" width="224" height="224" rx="51" fill="#295742"/><g fill="#f8f5e8" transform="translate(-6 0)"><path d="M83 195C99 172 106 143 111 122H91L96 102H116L120 87C127 60 142 50 163 50C179 50 189 60 185 73C183 82 170 83 165 77C162 73 163 68 166 65C155 63 148 74 145 89L142 102H164L159 122H137L131 147C122 179 107 199 87 205Z"/><circle cx="170" cy="183" r="13"/></g></svg>

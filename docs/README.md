@@ -7,5 +7,5 @@
 | [benchmarks/speech.md](benchmarks/speech.md) | Speech engine benchmark (Apple, Parakeet, Whisper) and the resulting engine decision. |
 | [RELEASING.md](RELEASING.md) | Release branches, signed builds and how in-app updates are published. |
 
-Planned work lives in [GitHub issues](https://github.com/Prateek-Vortex/focusbae/issues).
+Planned work lives in [GitHub issues](https://github.com/focusbae/focusbae/issues).
 Questions and ideas: [Discord](https://discord.gg/vWugF4Rreb).

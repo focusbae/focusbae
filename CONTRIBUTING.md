@@ -9,7 +9,7 @@ one promise: **nothing leaves the Mac unless the user turns it on.**
   bigger than a small fix, so we can agree on the approach first.
 - Read [`docs/CONTRACTS.md`](docs/CONTRACTS.md) for the data model and
   [`docs/decisions/`](docs/decisions/) for why things are built the way they are.
-- Planned work is in [GitHub issues](https://github.com/Prateek-Vortex/focusbae/issues).
+- Planned work is in [GitHub issues](https://github.com/focusbae/focusbae/issues).
   Comment on one before starting so two people don't build the same thing.
 
 ## Build and test

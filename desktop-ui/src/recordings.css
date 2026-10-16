@@ -375,6 +375,8 @@ ul.recording-warning {
 .transcript-timestamp { padding: 0; border: 0; background: none; color: var(--accent); font-size: inherit; text-decoration: underline; text-underline-offset: 3px; }
 .recording-library-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .recording-library-actions button { font-size: 12px; }
+.transcript-tools { display: flex; align-items: center; gap: 4px; }
+.transcript-tools .muted { margin-right: 6px; }
 .audio-storage { display: flex; gap: 8px 18px; flex-wrap: wrap; padding: 14px 16px; margin: 4px 0 18px; border: 1px solid var(--line); border-radius: 12px; color: var(--muted); font-size: 11px; }
 .audio-storage strong { color: var(--ink); font-weight: 500; }
 /* The name is the heading: it reads as a title until you click into it. */

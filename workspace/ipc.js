@@ -7,6 +7,7 @@ const { publicNote } = require("./notebook");
 const portable = require("./portable");
 const actions = require("./actions");
 const reminders = require("./reminders");
+const { formatTranscript, transcriptFileName } = require("../recording/transcript-export");
 const ORIGIN = "focusbae-workspace://app";
 const DOCUMENT = `${ORIGIN}/index.html`;
 const CHANNELS = [
@@ -97,6 +98,8 @@ const CHANNELS = [
   "capture.storage",
   "capture.importWav",
   "capture.exportAudio",
+  "capture.copyTranscript",
+  "capture.exportTranscript",
   "models.state",
   "models.refresh",
   "models.download",
@@ -108,6 +111,7 @@ const PUBLIC_ERRORS = {
   ATTACHMENT_MISSING: "This attachment is missing. Restore it from a workspace backup.",
   ATTACHMENT_CORRUPT: "This attachment failed its integrity check. Restore it from a workspace backup.",
   ATTACHMENT_IN_USE: "Remove this attachment from its note before deleting it.",
+  NO_TRANSCRIPT: "This recording has no transcript yet.",
   NO_AUDIO: "Audio is unavailable. It may have been deleted or not kept for playback.",
   INVALID_AUDIO: "The WAV file is incomplete or damaged. The original file was left unchanged.",
   UNSUPPORTED_AUDIO: "Choose an uncompressed 16-bit PCM WAV file with one or two channels.",
@@ -203,6 +207,7 @@ function registerWorkspaceIPC({
   backups,
   playback,
   appleNotes,
+  clipboard,
   attachments = new (require("./note-attachments").NoteAttachments)(catalog),
 }) {
   const emit = (type = "workspace.changed", entity) => {
@@ -217,6 +222,15 @@ function registerWorkspaceIPC({
         sequence: ++catalog.sequence,
       });
     }
+  };
+  const transcriptDocument = (input, format) => {
+    const store = catalog.scoped(input.workspaceId);
+    const full = recording.fullTranscript(input.workspaceId, v.uuid(input.id));
+    check(full.segments.some((segment) => !segment.echoOf), "NO_TRANSCRIPT", "This recording has no transcript yet");
+    return {
+      recording: full.recording,
+      ...formatTranscript({ ...full, timeZone: store._timezone() }, format),
+    };
   };
   const snapshot = () => ({
     workspace: catalog.active(),
@@ -387,6 +401,41 @@ function registerWorkspaceIPC({
       const filePath = require("node:path").extname(result.filePath)
         ? result.filePath : `${result.filePath}.wav`;
       return { canceled: false, ...(await playback.exportWav(input, filePath)) };
+    },
+    // The whole transcript, every page, as plain text on the clipboard or as a
+    // Markdown or text file the person saves. Nothing is written anywhere else.
+    "capture.copyTranscript": (input) => {
+      v.object(input, ["workspaceId", "id"]);
+      const { text, lines } = transcriptDocument(input, "text");
+      clipboard.writeText(text);
+      return { lines };
+    },
+    "capture.exportTranscript": async (input, event) => {
+      v.object(input, ["workspaceId", "id"]);
+      const { recording: record } = transcriptDocument(input, "text");
+      const result = await dialog.showSaveDialog(getWindow(), {
+        title: "Export transcript",
+        defaultPath: transcriptFileName(record, "md"),
+        filters: [
+          { name: "Markdown", extensions: ["md"] },
+          { name: "Plain text", extensions: ["txt"] },
+        ],
+        properties: ["createDirectory", "showOverwriteConfirmation"],
+      });
+      check(trusted(event, getWindow()), "PERMISSION_DENIED", "Workspace window closed");
+      if (result.canceled || !result.filePath) return { canceled: true };
+      const path = require("node:path");
+      const extension = path.extname(result.filePath).toLowerCase();
+      const filePath = extension ? result.filePath : `${result.filePath}.md`;
+      // Read again after the dialog: transcription or a rename may have finished meanwhile.
+      const { text, lines } = transcriptDocument(input, extension === ".txt" ? "text" : "markdown");
+      try {
+        require("node:fs").writeFileSync(filePath, text, { mode: 0o600 });
+      } catch (error) {
+        check(error.code !== "ENOSPC", "DISK_FULL", "Storage is full while exporting the transcript");
+        throw error;
+      }
+      return { canceled: false, lines, name: path.basename(filePath) };
     },
     "capture.start": (input) => recording.start(input),
     "capture.stop": (input) => {

@@ -13,6 +13,7 @@ import {
   LoaderCircle,
   Download,
   Upload,
+  Copy,
 } from "lucide-react";
 import "./recordings.css";
 import { AudioPlayer } from "./audio-player";
@@ -593,6 +594,7 @@ export function Recordings({
   const [busy, setBusy] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const [notice, setNotice] = useState(null);
+  const [exported, setExported] = useState(null);
   const [context, setContext] = useState(null);
   const [showEchoes, setShowEchoes] = useState(false);
   const [showImport, setShowImport] = useState(false);
@@ -604,6 +606,7 @@ export function Recordings({
     setSegmentOffset(0);
     setDetail(null);
     setNotice(null);
+    setExported(null);
     setContext(null);
   }, [selectedId]);
   useEffect(() => {
@@ -683,6 +686,25 @@ export function Recordings({
             : "Speaker saved.",
       );
       setAttempt((old) => old + 1);
+    } catch (failure) {
+      setError(failure);
+    } finally {
+      setBusy(false);
+    }
+  };
+  // The whole transcript, not just the page on screen; the main process reads every
+  // segment, so a long meeting is one copy or one file.
+  const takeTranscript = async (method) => {
+    setBusy(true);
+    setError(null);
+    setExported(null);
+    try {
+      const result = await unwrap(api.capture[method]({ workspaceId: workspace.id, id: selectedId }));
+      if (result.canceled) return;
+      const lines = `${result.lines} line${result.lines === 1 ? "" : "s"}`;
+      setExported(method === "copyTranscript"
+        ? `Copied the full transcript (${lines}).`
+        : `Saved ${result.name} (${lines}).`);
     } catch (failure) {
       setError(failure);
     } finally {
@@ -861,12 +883,23 @@ export function Recordings({
             <PriorContext context={context} openPerson={openPerson} />
             <div className="section-heading">
               <h3>Transcript</h3>
-              <span className="muted">
-                {echoCount
-                  ? `${detail.total - echoCount} of ${detail.total} segments`
-                  : `${detail.total} segments`}
-              </span>
+              <div className="transcript-tools">
+                <span className="muted">
+                  {echoCount
+                    ? `${detail.total - echoCount} of ${detail.total} segments`
+                    : `${detail.total} segments`}
+                </span>
+                {!!detail.transcript.length && (
+                  <>
+                    <Tool label="Copy transcript" icon={Copy} disabled={busy}
+                      onClick={() => takeTranscript("copyTranscript")} />
+                    <Tool label="Export transcript" icon={Download} disabled={busy}
+                      onClick={() => takeTranscript("exportTranscript")} />
+                  </>
+                )}
+              </div>
             </div>
+            {exported && <p className="speaker-notice" role="status">{exported}</p>}
             {!!echoCount && (
               <p className="echo-note">
                 {echoCount === 1

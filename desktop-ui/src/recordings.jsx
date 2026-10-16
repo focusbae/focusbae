@@ -18,6 +18,7 @@ import {
 import "./recordings.css";
 import { AudioPlayer } from "./audio-player";
 const api = window.focusbaeWorkspace;
+const MIC_KEY = "focusbae.microphone";
 const purposeName = {
   conversation: "Conversation",
   personal: "Voice note",
@@ -133,6 +134,26 @@ export function RecordDialog({
   const [consent, setConsent] = useState(false);
   const [keepAudio, setKeepAudio] = useState(false);
   const [notes, setNotes] = useState([]);
+  // The chosen microphone is remembered on this Mac by name; empty follows the
+  // Mac's default input, which switches to AirPods or a headset when they connect.
+  const [microphone, setMicrophone] = useState(() => {
+    try { return localStorage.getItem(MIC_KEY) ?? ""; } catch { return ""; }
+  });
+  // Listed when the menu is first opened, not with the dialog: listing briefly
+  // opens a hidden page, and most recordings use the default.
+  const [microphones, setMicrophones] = useState(null);
+  const listMicrophones = () => {
+    if (microphones) return;
+    setMicrophones([]);
+    unwrap(api.capture.microphones()).then((value) => setMicrophones(value.devices))
+      .catch(() => setMicrophones([]));
+  };
+  const chooseMicrophone = (name) => {
+    setMicrophone(name);
+    try { name ? localStorage.setItem(MIC_KEY, name) : localStorage.removeItem(MIC_KEY); } catch {}
+  };
+  const listed = !!microphone && (microphones ?? []).some((device) => device.name === microphone);
+  const missingMicrophone = !!microphone && microphones?.length > 0 && !listed;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   // Opening the record form is a user action, so engine availability may be probed here.
@@ -178,6 +199,7 @@ export function RecordDialog({
                 language,
                 consent,
                 keepAudio,
+                microphone: source === "system" ? null : microphone || null,
                 destination: ["today", "standalone"].includes(destination)
                   ? { kind: destination }
                   : { kind: "note", noteId: destination },
@@ -242,6 +264,30 @@ export function RecordDialog({
         </select>
         {source !== "microphone" && (
           <p className="muted">All system output, not a single meeting app.</p>
+        )}
+        {source !== "system" && (
+          <>
+            <label htmlFor="capture-microphone">Microphone</label>
+            <select
+              id="capture-microphone"
+              value={microphone}
+              disabled={busy}
+              onFocus={listMicrophones}
+              onPointerDown={listMicrophones}
+              onChange={(event) => chooseMicrophone(event.target.value)}
+            >
+              <option value="">Mac default (switches to AirPods or a headset)</option>
+              {(microphones ?? []).map((device) => (
+                <option key={device.name} value={device.name}>{device.name}</option>
+              ))}
+              {!!microphone && !listed && (
+                <option value={microphone}>{microphone}{missingMicrophone ? " (not connected)" : ""}</option>
+              )}
+            </select>
+            {missingMicrophone && (
+              <p className="muted">Not connected. The Mac default is used instead.</p>
+            )}
+          </>
         )}
         <p className="capture-permission">
           {source === "microphone"
@@ -773,6 +819,7 @@ export function Recordings({
               <span>{sourceName[record.sourceMode]}</span>
               <span>{record.state}</span>
               <span>{time(record.durationMs)}</span>
+              {record.microphones?.length > 0 && <span title="Microphone used">{record.microphones.join(", then ")}</span>}
               {record.originalName && <span className="recording-original" title={record.originalName}>Original: {record.originalName}</span>}
             </div>
             {record.reason && (

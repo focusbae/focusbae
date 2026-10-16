@@ -52,6 +52,7 @@ function publicRecording(record) {
     suggestions: record.metadata?.actionExtraction ?? null,
     diarization: record.metadata?.diarization ?? null,
     gaps: record.metadata?.gaps ?? [],
+    microphones: record.metadata?.microphones ?? [],
     aiState: record.aiState,
   };
 }
@@ -107,6 +108,7 @@ class RecordingService extends EventEmitter {
     catalog,
     createSource = native.createSource,
     capabilities = native.capabilities,
+    listMicrophones = native.listMicrophones,
     speech = null,
     model = null,
     createEngine = null,
@@ -130,6 +132,7 @@ class RecordingService extends EventEmitter {
       catalog,
       createSource,
       capabilities,
+      listMicrophones,
       legacyBusy,
       clock,
       startTimeout,
@@ -195,8 +198,12 @@ class RecordingService extends EventEmitter {
       "language",
       "consent",
       "keepAudio",
+      "microphone",
     ]);
     const store = this.catalog.scoped(input.context.workspaceId);
+    // The microphone chosen in the record dialog, by name; null follows the Mac's
+    // default input.
+    const microphone = input.microphone == null ? null : v.text(input.microphone, "microphone", 200);
     const { context, ...args } = input;
     v.choice(
       input.purpose,
@@ -284,6 +291,8 @@ class RecordingService extends EventEmitter {
       levels: {},
       recovering: {},
       resumeAt: {},
+      microphone: { prefer: microphone, fallback: false },
+      microphones: [],
       recoveries: 0,
       gaps: [],
       accepting: true,
@@ -409,27 +418,15 @@ class RecordingService extends EventEmitter {
   }
   async acquire(session, kinds) {
     const acquisitions = kinds.map(async (kind) => {
-      const source = this.createSource(kind);
-      session.sources[kind] = source;
-      session.buffers[kind] = Buffer.alloc(0);
-      session.sequences[kind] = 0;
-      session.levels[kind] = 0;
-      let ready, fail;
-      const received = new Promise((resolve, reject) => {
-        ready = resolve;
-        fail = reject;
-      });
-      session.cancelStart ??= [];
-      session.cancelStart.push(() => fail(new Error("Start cancelled")));
-      this.attach(session, kind, source, ready, fail);
-      const timeout = setTimeout(
-        () => fail(new Error("No audio from selected source")),
-        this.startTimeout,
-      );
       try {
-        await Promise.all([source.start(), received]);
-      } finally {
-        clearTimeout(timeout);
+        await this.open(session, kind, this.createSource(kind, this.sourceOptions(session, kind)), this.startTimeout);
+      } catch (error) {
+        // A Bluetooth headset can take many seconds to deliver audio after it
+        // wakes; rather than fail the start, try the Mac's own microphone once.
+        if (kind !== "microphone" || session.microphone.fallback || session.startCancelled) throw error;
+        await session.sources[kind]?.stop().catch(() => {});
+        session.microphone.fallback = true;
+        await this.open(session, kind, this.createSource(kind, this.sourceOptions(session, kind)), this.startTimeout);
       }
     });
     await Promise.all(acquisitions);
@@ -512,6 +509,36 @@ class RecordingService extends EventEmitter {
       fail(new Error("Source unavailable"));
       if (session.sources[kind] === source) this.recover(session, kind);
     });
+    source.on("device", (name) => {
+      if (session.sources[kind] === source && name && !session.microphones.includes(name) && session.microphones.length < 10)
+        session.microphones.push(name);
+    });
+  }
+  sourceOptions(session, kind) {
+    if (kind !== "microphone") return {};
+    return session.microphone.fallback ? { fallback: true } : { prefer: session.microphone.prefer };
+  }
+  // Makes the source the session's current one and waits for its first audio.
+  async open(session, kind, source, timeoutMs) {
+    session.sources[kind] = source;
+    session.buffers[kind] ??= Buffer.alloc(0);
+    session.sequences[kind] ??= 0;
+    session.levels[kind] ??= 0;
+    let ready, fail;
+    const received = new Promise((resolve, reject) => {
+      ready = resolve;
+      fail = reject;
+    });
+    received.catch(() => {});
+    session.cancelStart ??= [];
+    session.cancelStart.push(() => fail(new Error("Start cancelled")));
+    this.attach(session, kind, source, ready, fail);
+    const timeout = setTimeout(() => fail(new Error("No audio from selected source")), timeoutMs);
+    try {
+      await Promise.all([source.start(), received]);
+    } finally {
+      clearTimeout(timeout);
+    }
   }
   live(session) {
     return (
@@ -538,26 +565,19 @@ class RecordingService extends EventEmitter {
       session.levels[kind] = 0;
       this.emitChange();
       await previous?.stop().catch(() => {});
-      for (const delay of this.recoveryDelays) {
+      for (const [attempt, delay] of this.recoveryDelays.entries()) {
         await new Promise((resolve) => setTimeout(resolve, delay));
         if (!this.live(session)) return;
-        const source = this.createSource(kind);
-        session.sources[kind] = source;
-        let ready, fail;
-        const received = new Promise((resolve, reject) => {
-          ready = resolve;
-          fail = reject;
-        });
-        received.catch(() => {});
-        this.attach(session, kind, source, ready, fail);
-        const timeout = setTimeout(() => fail(new Error("No audio")), this.recoveryTimeout);
+        // The last try is the Mac's own microphone, and once it works the recording
+        // stays on it: a headset that keeps failing must not keep interrupting.
+        if (kind === "microphone" && attempt === this.recoveryDelays.length - 1)
+          session.microphone.fallback = true;
+        const source = this.createSource(kind, this.sourceOptions(session, kind));
         try {
-          await Promise.all([source.start(), received]);
+          await this.open(session, kind, source, this.recoveryTimeout);
           return;
         } catch {
           if (session.sources[kind] === source) await source.stop().catch(() => {});
-        } finally {
-          clearTimeout(timeout);
         }
       }
       if (this.live(session)) this.stop(session.id, "source").catch(() => {});
@@ -648,6 +668,7 @@ class RecordingService extends EventEmitter {
           issues,
           durationMs: session.spool.manifest.durationMs,
           ...(session.gaps.length ? { gaps: session.gaps } : {}),
+          ...(session.microphones.length ? { microphones: session.microphones } : {}),
           ...(session.startError ? { startError: session.startError } : {}),
         },
       });

@@ -811,3 +811,53 @@ test("recovery gives up after its bounded attempts and keeps the audio", async (
   assert.equal(detail.recording.state, "interrupted");
   assert.match(detail.recording.reason, /stopped supplying audio/);
 });
+
+test("the chosen microphone is opened by name, and a failing one falls back to the built-in microphone and stays there", async (t) => {
+  let now = 0;
+  const f = await fixture(t, { clock: () => now, recoveryDelays: [0, 0, 0] });
+  const opened = [];
+  const create = f.service.createSource;
+  let failing = 0;
+  f.service.createSource = (kind, options) => {
+    opened.push(options);
+    return failing-- > 0 ? deadSource() : create(kind);
+  };
+  assert.throws(() => f.service.start(f.input({ microphone: 5 })), { code: "INVALID_INPUT" });
+  const r = f.service.start(f.input({ microphone: "AirPods Pro" }));
+  await turn();
+  assert.deepEqual(opened, [{ prefer: "AirPods Pro" }]);
+  f.sources.microphone.emit("device", "AirPods Pro");
+  now = 5000;
+  f.sources.microphone.emit("audio", tone(5));
+  // The headset stops; it fails twice more, so the third try is the Mac's own.
+  failing = 2;
+  f.sources.microphone.emit("error", new Error("headset gone"));
+  await until(() => opened.length === 4 && !f.service.active.recovering.microphone);
+  assert.deepEqual(opened.slice(1), [{ prefer: "AirPods Pro" }, { prefer: "AirPods Pro" }, { fallback: true }]);
+  f.sources.microphone.emit("device", "MacBook Air Microphone (Built-in)");
+  f.sources.microphone.emit("error", new Error("default input changed again"));
+  await until(() => opened.length === 5 && !f.service.active.recovering.microphone);
+  assert.deepEqual(opened[4], { fallback: true }, "stays on the built-in microphone");
+  await f.service.stop(r.id);
+  assert.deepEqual(f.service.detail(r.workspaceId, r.id).recording.microphones,
+    ["AirPods Pro", "MacBook Air Microphone (Built-in)"]);
+});
+
+test("a microphone that never delivers audio at the start is retried once as the built-in microphone", async (t) => {
+  const f = await fixture(t, { startTimeout: 50 });
+  const opened = [];
+  const create = f.service.createSource;
+  f.service.createSource = (kind, options) => {
+    opened.push(options);
+    if (options.fallback) return create(kind);
+    const silent = new EventEmitter();
+    silent.start = async () => {};
+    silent.stop = async () => { silent.stops = (silent.stops ?? 0) + 1; };
+    return silent;
+  };
+  const r = f.service.start(f.input());
+  await until(() => f.service.active && f.service.current(f.service.active).state === "recording");
+  assert.deepEqual(opened, [{ prefer: null }, { fallback: true }]);
+  await f.service.stop(r.id);
+  assert.equal(f.service.detail(r.workspaceId, r.id).recording.state, "captured");
+});

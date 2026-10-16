@@ -29,7 +29,24 @@
     }
     for (const track of stream.getTracks())
       track.addEventListener("ended", fail);
-    navigator.mediaDevices.addEventListener("devicechange", fail);
+    // A device being added or removed only matters when it changes the input this
+    // capture uses: AirPods connecting become the Mac's default input, and the
+    // recorder then reopens the microphone on it. A monitor or keyboard with a
+    // speaker appearing is ignored. Reporting is left to the main process, which
+    // keeps the same recording going.
+    const [track] = stream.getAudioTracks();
+    const { deviceId, groupId } = track.getSettings();
+    const inputGroup = async () => {
+      const inputs = (await navigator.mediaDevices.enumerateDevices())
+        .filter((device) => device.kind === "audioinput");
+      return (inputs.find((device) => device.deviceId === "default") ??
+        inputs.find((device) => device.deviceId === deviceId))?.groupId;
+    };
+    const initialGroup = await inputGroup().catch(() => groupId);
+    navigator.mediaDevices.addEventListener("devicechange", async () => {
+      const current = await inputGroup().catch(() => null);
+      if (track.readyState === "ended" || current !== initialGroup) fail();
+    });
     // Chromium supplies the resampling; the worklet only packs PCM16 batches.
     context = new AudioContext({ sampleRate: 16000 });
     await context.audioWorklet.addModule("mic-worklet.js");

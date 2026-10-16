@@ -51,6 +51,7 @@ function publicRecording(record) {
     issues: record.metadata?.issues ?? [],
     suggestions: record.metadata?.actionExtraction ?? null,
     diarization: record.metadata?.diarization ?? null,
+    gaps: record.metadata?.gaps ?? [],
     aiState: record.aiState,
   };
 }
@@ -113,6 +114,12 @@ class RecordingService extends EventEmitter {
     clock = () => performance.now(),
     startTimeout = 15000,
     sourceTimeout = 5000,
+    // A source that fails mid-recording (AirPods connecting, a headset switching
+    // mode, the audio helper exiting) is reopened after each of these delays in turn;
+    // the recording stops only when every attempt fails.
+    recoveryDelays = [300, 1000, 3000],
+    recoveryTimeout = 5000,
+    maxRecoveries = 20,
     silenceTimeout = SILENCE_TIMEOUT_MS,
     maxDuration = MAX_DURATION_MS,
     extractor = null,
@@ -127,6 +134,9 @@ class RecordingService extends EventEmitter {
       clock,
       startTimeout,
       sourceTimeout,
+      recoveryDelays,
+      recoveryTimeout,
+      maxRecoveries,
       silenceTimeout,
       maxDuration,
       extractor,
@@ -272,6 +282,10 @@ class RecordingService extends EventEmitter {
       sequences: {},
       lastInput: {},
       levels: {},
+      recovering: {},
+      resumeAt: {},
+      recoveries: 0,
+      gaps: [],
       accepting: true,
       stopping: null,
       startCancelled: false,
@@ -407,20 +421,7 @@ class RecordingService extends EventEmitter {
       });
       session.cancelStart ??= [];
       session.cancelStart.push(() => fail(new Error("Start cancelled")));
-      source.on("audio", (bytes) => {
-        if (session.accepting) {
-          this.audio(session, kind, bytes);
-          ready();
-        }
-      });
-      source.on("error", () => {
-        fail(new Error("Source unavailable"));
-        if (
-          this.active === session &&
-          this.current(session).state === "recording"
-        )
-          this.stop(session.id, "source").catch(() => {});
-      });
+      this.attach(session, kind, source, ready, fail);
       const timeout = setTimeout(
         () => fail(new Error("No audio from selected source")),
         this.startTimeout,
@@ -440,16 +441,14 @@ class RecordingService extends EventEmitter {
       const now = this.clock();
       let reason;
       if (now - session.origin >= this.maxDuration) reason = "duration";
-      else if (
-        Object.values(session.lastInput).some(
-          (time) => now - time >= this.sourceTimeout,
-        )
-      )
-        reason = "source";
       else if (now - session.lastVoice >= this.silenceTimeout)
         reason = "silence";
-      if (reason) this.stop(session.id, reason).catch(() => {});
-      else this.emitChange();
+      if (reason) return void this.stop(session.id, reason).catch(() => {});
+      // A source that stops supplying audio is reopened, not the recording ended.
+      for (const [kind, time] of Object.entries(session.lastInput))
+        if (time !== undefined && now - time >= this.sourceTimeout)
+          this.recover(session, kind);
+      this.emitChange();
     }, 1000);
     session.timer.unref?.();
     this.emitChange();
@@ -467,15 +466,28 @@ class RecordingService extends EventEmitter {
         session.lastInput[kind] !== undefined &&
         now - session.lastInput[kind] > this.sourceTimeout + bytes.length / 32
       ) {
-        this.stop(session.id, "source").catch(() => {});
+        this.recover(session, kind);
         return;
       }
       session.lastInput[kind] = now;
-      if (session.offsets[kind] === undefined)
+      if (session.offsets[kind] === undefined) {
         session.offsets[kind] = Math.max(
           0,
           Math.round(now - session.origin - bytes.length / 32),
         );
+        // After a reopened source, its audio resumes at recording time, so the
+        // microphone and system audio stay aligned. The gap is recorded, not
+        // treated as damage.
+        const resumeAt = session.resumeAt[kind];
+        if (resumeAt !== undefined) {
+          delete session.resumeAt[kind];
+          session.offsets[kind] = Math.max(resumeAt, session.offsets[kind]);
+          if (session.offsets[kind] - resumeAt > 2 && session.gaps.length < 100) {
+            session.gaps.push({ source: kind, fromMs: resumeAt, toMs: session.offsets[kind], reason: "device-change" });
+            session.spool.save({ gaps: session.gaps });
+          }
+        }
+      }
       const level = rms(bytes, 0, bytes.length - (bytes.length % 2));
       session.levels[kind] = Math.min(1, level / 16000);
       if (level > 180) session.lastVoice = now;
@@ -485,6 +497,75 @@ class RecordingService extends EventEmitter {
     } catch {
       session.accepting = false;
       this.stop(session.id, "disk").catch(() => {});
+    }
+  }
+  // Source events count only while the source is the session's current one: a
+  // source replaced during recovery may still emit as it shuts down.
+  attach(session, kind, source, ready = () => {}, fail = () => {}) {
+    source.on("audio", (bytes) => {
+      if (session.accepting && session.sources[kind] === source) {
+        this.audio(session, kind, bytes);
+        ready();
+      }
+    });
+    source.on("error", () => {
+      fail(new Error("Source unavailable"));
+      if (session.sources[kind] === source) this.recover(session, kind);
+    });
+  }
+  live(session) {
+    return (
+      this.active === session &&
+      session.accepting &&
+      !session.stopping &&
+      this.current(session).state === "recording"
+    );
+  }
+  async recover(session, kind) {
+    if (!this.live(session) || session.recovering[kind]) return;
+    if (++session.recoveries > this.maxRecoveries)
+      return void this.stop(session.id, "source").catch(() => {});
+    session.recovering[kind] = true;
+    const previous = session.sources[kind];
+    try {
+      delete session.lastInput[kind];
+      const size = session.buffers[kind].length - (session.buffers[kind].length % 2);
+      if (size) this.flushSource(session, kind, size);
+      session.buffers[kind] = Buffer.alloc(0);
+      // A partial flush can end between milliseconds; chunk offsets are whole ones.
+      session.resumeAt[kind] = Math.ceil(session.offsets[kind] ?? this.clock() - session.origin);
+      session.offsets[kind] = undefined;
+      session.levels[kind] = 0;
+      this.emitChange();
+      await previous?.stop().catch(() => {});
+      for (const delay of this.recoveryDelays) {
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        if (!this.live(session)) return;
+        const source = this.createSource(kind);
+        session.sources[kind] = source;
+        let ready, fail;
+        const received = new Promise((resolve, reject) => {
+          ready = resolve;
+          fail = reject;
+        });
+        received.catch(() => {});
+        this.attach(session, kind, source, ready, fail);
+        const timeout = setTimeout(() => fail(new Error("No audio")), this.recoveryTimeout);
+        try {
+          await Promise.all([source.start(), received]);
+          return;
+        } catch {
+          if (session.sources[kind] === source) await source.stop().catch(() => {});
+        } finally {
+          clearTimeout(timeout);
+        }
+      }
+      if (this.live(session)) this.stop(session.id, "source").catch(() => {});
+    } catch {
+      session.accepting = false;
+      this.stop(session.id, "disk").catch(() => {});
+    } finally {
+      session.recovering[kind] = false;
     }
   }
   flushSource(session, kind, size) {
@@ -566,6 +647,7 @@ class RecordingService extends EventEmitter {
           reason: REASONS[failure],
           issues,
           durationMs: session.spool.manifest.durationMs,
+          ...(session.gaps.length ? { gaps: session.gaps } : {}),
           ...(session.startError ? { startError: session.startError } : {}),
         },
       });

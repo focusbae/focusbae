@@ -40,6 +40,14 @@ const unwrap = async (promise) => {
 };
 const time = (ms) =>
   `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, "0")}`;
+// A source reopened after a device change leaves a short, known pause.
+const gapNote = (gaps) => {
+  const seconds = gaps.reduce((sum, gap) => sum + gap.toMs - gap.fromMs, 0) / 1000;
+  const length = seconds < 10 ? seconds.toFixed(1) : Math.round(seconds);
+  return gaps.length === 1
+    ? `Audio paused for ${length} s at ${time(gaps[0].fromMs)} while the audio device changed. Recording continued.`
+    : `Audio paused ${gaps.length} times (${length} s in total) while audio devices changed. Recording continued.`;
+};
 // Readiness for a recording's language (English, Hindi, mixed); falls back to the
 // English summary when the status predates per-language routing.
 const speechReady = (status, language) =>
@@ -769,6 +777,9 @@ export function Recordings({
             </div>
             {record.reason && (
               <p className="recording-warning">{record.reason}</p>
+            )}
+            {record.gaps?.length > 0 && (
+              <p className="muted recording-gaps">{gapNote(record.gaps)}</p>
             )}
             {record.issues.length > 0 && (
               <ul className="recording-warning">

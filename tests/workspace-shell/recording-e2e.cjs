@@ -214,6 +214,24 @@ module.exports = async ({ app, page, profile, output, packaged, clickPage }) => 
   assert.equal(await player.count(), 0);
   await page.getByText("Transcription: complete", { exact: true }).waitFor();
   await page.getByText("Synthetic recording transcript from this Mac.", { exact: true }).first().waitFor();
+  // The whole transcript leaves only through the clipboard or a file the person picks.
+  // The clipboard is stubbed so the test does not overwrite the developer's own.
+  await app.evaluate(({ clipboard }) => {
+    global.copiedTranscript = null;
+    clipboard.writeText = (text) => { global.copiedTranscript = text; };
+  });
+  await page.getByRole("button", { name: "Copy transcript", exact: true }).click();
+  await page.getByText(/^Copied the full transcript \(\d+ lines?\)\.$/).waitFor();
+  assert.match(await app.evaluate(() => global.copiedTranscript),
+    /\[0:00\] .+: Synthetic recording transcript from this Mac\./);
+  const transcriptFile = path.join(profile, "exported transcript.md");
+  await app.evaluate(({ dialog }, file) => {
+    dialog.showSaveDialog = async () => ({ canceled: false, filePath: file });
+  }, transcriptFile);
+  await page.getByRole("button", { name: "Export", exact: true }).click();
+  await page.getByText(/^Saved exported transcript\.md \(\d+ lines?\)\.$/).waitFor();
+  assert.match(fs.readFileSync(transcriptFile, "utf8"), /^# .+\n\n.+\n\n\*\*\[0:00\] .+:\*\* Synthetic recording transcript/);
+  await screenshot("transcript-exported");
   const importedFile = path.join(profile, "Imported conversation.wav");
   const importedPcm = Buffer.alloc(48000);
   for (let n = 0; n < importedPcm.length / 2; n++)

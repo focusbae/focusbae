@@ -11,6 +11,7 @@ const {
   ipcMain,
   dialog,
   Notification,
+  clipboard,
 } = require("electron");
 const { WorkspaceCatalog } = require("./workspace/catalog");
 const { registerWorkspaceIPC, DOCUMENT, trusted, publicError } = require("./workspace/ipc");
@@ -205,6 +206,7 @@ function initialize({ privacy, busy, desktopSettings, onRecordingChange = () => 
     extraction: extractor,
     desktopSettings,
     clipboardHistory,
+    clipboard,
     backups,
     appleNotes: new (require("./workspace/apple-notes").AppleNotesImporter)(),
   });

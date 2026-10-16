@@ -74,6 +74,26 @@ function markEchoes(segments) {
   });
 }
 
+// What a transcript row shows: "You", the person's name, or the detected label.
+function displaySpeaker(speaker) {
+  return speaker.identity?.kind === "self"
+    ? "You"
+    : speaker.identity?.kind === "person"
+      ? speaker.identity.label
+      : speaker.label;
+}
+function publicSegment(speakers) {
+  return ({ id, source, text, startMs, endMs, speakerId, echoOf }) => ({
+    id,
+    source,
+    text,
+    startMs,
+    endMs,
+    speaker: speakers.get(speakerId) ?? null,
+    echoOf,
+  });
+}
+
 function requestId(key) {
   const bytes = createHash("sha256").update(key).digest().subarray(0, 16);
   bytes[6] = (bytes[6] & 15) | 80;
@@ -854,6 +874,23 @@ class RecordingService extends EventEmitter {
     this.emitChange();
     return { speaker: { id: updated.id, label: updated.label, identity: updated.identity }, attribution };
   }
+  // Every segment of a recording, in order, for copying or export. Echoes are marked
+  // across the whole transcript, not page by page as the view does.
+  fullTranscript(workspaceId, id) {
+    const store = this.catalog.scoped(workspaceId),
+      record = store.get(scope(store), "recording", id);
+    const segments = [];
+    for (let page; (page = store.list(scope(store), "transcript", { recordingId: id, limit: 1000, offset: segments.length })).length;)
+      segments.push(...page);
+    const speakers = new Map(
+      store.list(scope(store), "speaker", { recordingId: id, limit: 1000 })
+        .map((speaker) => [speaker.id, displaySpeaker(speaker)]),
+    );
+    return {
+      recording: publicRecording(record),
+      segments: markEchoes(segments).map(publicSegment(speakers)),
+    };
+  }
   detail(workspaceId, id, offset = 0) {
     const store = this.catalog.scoped(workspaceId),
       record = store.get(scope(store), "recording", id);
@@ -897,36 +934,19 @@ class RecordingService extends EventEmitter {
         audio.state = "recovery-needed";
       }
     const speakerRows = store.list(scope(store), "speaker", { recordingId: id, limit: 1000 });
-    // What a transcript row shows: "You", the person's name, or the detected label.
-    const display = (speaker) =>
-      speaker.identity?.kind === "self"
-        ? "You"
-        : speaker.identity?.kind === "person"
-          ? speaker.identity.label
-          : speaker.label;
-    const speakers = new Map(speakerRows.map((speaker) => [speaker.id, display(speaker)]));
+    const speakers = new Map(speakerRows.map((speaker) => [speaker.id, displaySpeaker(speaker)]));
     return {
       recording: {
         ...publicRecording(record),
         processingError: record.metadata.processingError ?? null,
       },
-      transcript: markEchoes(transcript).map(
-        ({ id, source, text, startMs, endMs, speakerId, echoOf }) => ({
-          id,
-          source,
-          text,
-          startMs,
-          endMs,
-          speaker: speakers.get(speakerId) ?? null,
-          echoOf,
-        }),
-      ),
+      transcript: markEchoes(transcript).map(publicSegment(speakers)),
       total: count,
       speakers: speakerRows.map((speaker) => ({
         id: speaker.id,
         label: speaker.label,
         identity: speaker.identity ?? { kind: "unknown", id: null, label: null },
-        display: display(speaker),
+        display: displaySpeaker(speaker),
       })),
       noteId: link?.note_id ?? null,
       audio,

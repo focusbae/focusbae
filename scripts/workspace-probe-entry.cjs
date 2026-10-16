@@ -172,9 +172,9 @@ global.workspaceProbe = {
         content: "Synthetic recording transcript from this Mac.",
       }),
     });
-    service.createSource = (kind) => {
+    service.createSource = (kind, options) => {
       if (kind === "microphone" && nativeMicrophone)
-        return new (require("../recording/sources").Microphone)();
+        return new (require("../recording/sources").Microphone)(options);
       const source = new EventEmitter();
       let timer;
       const pcm = Buffer.alloc(3200);

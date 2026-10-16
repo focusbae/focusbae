@@ -40,6 +40,12 @@ module.exports = async ({ app, page, profile, output, packaged, clickPage }) => 
   await dialog.getByLabel("Purpose", { exact: true }).selectOption("personal");
   assert.equal(await dialog.getByRole("checkbox", { name: /Keep audio for playback/ }).isChecked(), false);
   await dialog.getByRole("checkbox", { name: /I have permission/ }).check();
+  // The microphone list names devices without opening any of them.
+  const microphone = dialog.getByLabel("Microphone", { exact: true });
+  assert.equal(await microphone.inputValue(), "");
+  assert.equal(await microphone.locator("option").count(), 1, "nothing is listed until the menu is opened");
+  await microphone.focus();
+  await page.waitForFunction(() => document.querySelectorAll("#capture-microphone option").length > 1);
   await screenshot("dialog");
   await dialog.getByRole("button", { name: "Start recording" }).click();
   await waitCapture((state) => state.active?.state === "recording");

@@ -98,6 +98,7 @@ const CHANNELS = [
   "capture.storage",
   "capture.importWav",
   "capture.exportAudio",
+  "capture.microphones",
   "capture.copyTranscript",
   "capture.exportTranscript",
   "models.state",
@@ -437,6 +438,8 @@ function registerWorkspaceIPC({
       }
       return { canceled: false, lines, name: path.basename(filePath) };
     },
+    // Names only, for the record dialog's microphone choice; no microphone opens.
+    "capture.microphones": async () => ({ devices: await recording.listMicrophones() }),
     "capture.start": (input) => recording.start(input),
     "capture.stop": (input) => {
       v.object(input, ["workspaceId", "id"]);

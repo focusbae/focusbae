@@ -412,3 +412,4 @@ ul.recording-warning {
   flex: 1;
   min-width: 0;
 }
+.recording-gaps { margin: 8px 0 0; font-size: 12px; }

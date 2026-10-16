@@ -8,8 +8,12 @@ const {
   isSupported,
 } = require("../meeting-capture/audio-sources");
 class Microphone extends EventEmitter {
-  constructor() {
+  // prefer: a microphone name chosen in the record dialog; fallback: open the
+  // built-in microphone; list: only name the microphones, opening none.
+  constructor({ prefer = null, fallback = false, list = false } = {}) {
     super();
+    Object.assign(this, { prefer, fallback, list });
+    this.device = null;
     this.id = randomUUID();
     this.channel = `local-mic:${this.id}`;
     this.sequence = 0;
@@ -18,7 +22,11 @@ class Microphone extends EventEmitter {
   async start() {
     const { BrowserWindow, session, ipcMain } = require("electron");
     this.ipcMain = ipcMain;
-    const url = `${pathToFileURL(path.join(__dirname, "mic.html")).href}?capture=${this.id}`;
+    const query = new URLSearchParams({ capture: this.id });
+    if (this.list) query.set("list", "1");
+    else if (this.fallback) query.set("fallback", "1");
+    else if (this.prefer) query.set("prefer", this.prefer);
+    const url = `${pathToFileURL(path.join(__dirname, "mic.html")).href}?${query}`;
     const isolated = session.fromPartition(`local-mic-${this.id}`);
     const allowed = new Set([
       url,
@@ -81,6 +89,18 @@ class Microphone extends EventEmitter {
         this.stopped?.();
         return;
       }
+      if (this.list && Array.isArray(payload?.devices)) {
+        this.emit("devices", payload.devices
+          .filter((device) => typeof device?.name === "string" && device.name.length <= 200)
+          .slice(0, 50)
+          .map((device) => ({ name: device.name, builtIn: device.builtIn === true })));
+        return;
+      }
+      if (payload && Object.hasOwn(payload, "device")) {
+        this.device = typeof payload.device === "string" ? payload.device.slice(0, 200) : null;
+        this.emit("device", this.device);
+        return;
+      }
       if (payload?.error) {
         this.emit(
           "error",
@@ -121,6 +141,23 @@ class Microphone extends EventEmitter {
     this.win = null;
   }
 }
+// The Mac's microphones by name, for the record dialog. Opens none of them, so the
+// microphone indicator stays off.
+async function listMicrophones() {
+  const probe = new Microphone({ list: true });
+  try {
+    const devices = new Promise((resolve) => {
+      probe.once("devices", resolve);
+      setTimeout(() => resolve([]), 5000).unref?.();
+    });
+    await probe.start();
+    return await devices;
+  } finally {
+    probe.stopping = true;
+    if (probe.win && !probe.win.isDestroyed()) probe.win.destroy();
+    if (probe.listener) probe.ipcMain.removeListener(probe.channel, probe.listener);
+  }
+}
 function capabilities() {
   return {
     microphone: {
@@ -133,8 +170,9 @@ function capabilities() {
 module.exports = {
   Microphone,
   capabilities,
-  createSource: (kind) =>
+  listMicrophones,
+  createSource: (kind, options = {}) =>
     kind === "system"
       ? new SystemAudioSource({ strict: true })
-      : new Microphone(),
+      : new Microphone(options),
 };

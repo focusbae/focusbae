@@ -228,7 +228,7 @@ module.exports = async ({ app, page, profile, output, packaged, clickPage }) => 
   await app.evaluate(({ dialog }, file) => {
     dialog.showSaveDialog = async () => ({ canceled: false, filePath: file });
   }, transcriptFile);
-  await page.getByRole("button", { name: "Export", exact: true }).click();
+  await page.getByRole("button", { name: "Export transcript", exact: true }).click();
   await page.getByText(/^Saved exported transcript\.md \(\d+ lines?\)\.$/).waitFor();
   assert.match(fs.readFileSync(transcriptFile, "utf8"), /^# .+\n\n.+\n\n\*\*\[0:00\] .+:\*\* Synthetic recording transcript/);
   await screenshot("transcript-exported");

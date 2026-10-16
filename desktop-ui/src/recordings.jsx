@@ -14,7 +14,6 @@ import {
   Download,
   Upload,
   Copy,
-  FileDown,
 } from "lucide-react";
 import "./recordings.css";
 import { AudioPlayer } from "./audio-player";
@@ -892,12 +891,10 @@ export function Recordings({
                 </span>
                 {!!detail.transcript.length && (
                   <>
-                    <button type="button" disabled={busy} onClick={() => takeTranscript("copyTranscript")}>
-                      <Copy size={15} /> Copy transcript
-                    </button>
-                    <button type="button" disabled={busy} onClick={() => takeTranscript("exportTranscript")}>
-                      <FileDown size={15} /> Export
-                    </button>
+                    <Tool label="Copy transcript" icon={Copy} disabled={busy}
+                      onClick={() => takeTranscript("copyTranscript")} />
+                    <Tool label="Export transcript" icon={Download} disabled={busy}
+                      onClick={() => takeTranscript("exportTranscript")} />
                   </>
                 )}
               </div>

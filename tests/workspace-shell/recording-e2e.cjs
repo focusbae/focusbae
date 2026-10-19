@@ -40,6 +40,12 @@ module.exports = async ({ app, page, profile, output, packaged, clickPage }) => 
   await dialog.getByLabel("Purpose", { exact: true }).selectOption("personal");
   assert.equal(await dialog.getByRole("checkbox", { name: /Keep audio for playback/ }).isChecked(), false);
   await dialog.getByRole("checkbox", { name: /I have permission/ }).check();
+  // The microphone list names devices without opening any of them.
+  const microphone = dialog.getByLabel("Microphone", { exact: true });
+  assert.equal(await microphone.inputValue(), "");
+  assert.equal(await microphone.locator("option").count(), 1, "nothing is listed until the menu is opened");
+  await microphone.focus();
+  await page.waitForFunction(() => document.querySelectorAll("#capture-microphone option").length > 1);
   await screenshot("dialog");
   await dialog.getByRole("button", { name: "Start recording" }).click();
   await waitCapture((state) => state.active?.state === "recording");
@@ -214,6 +220,24 @@ module.exports = async ({ app, page, profile, output, packaged, clickPage }) => 
   assert.equal(await player.count(), 0);
   await page.getByText("Transcription: complete", { exact: true }).waitFor();
   await page.getByText("Synthetic recording transcript from this Mac.", { exact: true }).first().waitFor();
+  // The whole transcript leaves only through the clipboard or a file the person picks.
+  // The clipboard is stubbed so the test does not overwrite the developer's own.
+  await app.evaluate(({ clipboard }) => {
+    global.copiedTranscript = null;
+    clipboard.writeText = (text) => { global.copiedTranscript = text; };
+  });
+  await page.getByRole("button", { name: "Copy transcript", exact: true }).click();
+  await page.getByText(/^Copied the full transcript \(\d+ lines?\)\.$/).waitFor();
+  assert.match(await app.evaluate(() => global.copiedTranscript),
+    /\[0:00\] .+: Synthetic recording transcript from this Mac\./);
+  const transcriptFile = path.join(profile, "exported transcript.md");
+  await app.evaluate(({ dialog }, file) => {
+    dialog.showSaveDialog = async () => ({ canceled: false, filePath: file });
+  }, transcriptFile);
+  await page.getByRole("button", { name: "Export transcript", exact: true }).click();
+  await page.getByText(/^Saved exported transcript\.md \(\d+ lines?\)\.$/).waitFor();
+  assert.match(fs.readFileSync(transcriptFile, "utf8"), /^# .+\n\n.+\n\n\*\*\[0:00\] .+:\*\* Synthetic recording transcript/);
+  await screenshot("transcript-exported");
   const importedFile = path.join(profile, "Imported conversation.wav");
   const importedPcm = Buffer.alloc(48000);
   for (let n = 0; n < importedPcm.length / 2; n++)

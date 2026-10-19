@@ -21,7 +21,7 @@ transcribes them on your Mac, and keeps track of who promised what to whom.</p>
 
 <p>
   <a href="https://discord.gg/vWugF4Rreb"><img src="https://img.shields.io/badge/Discord-join%20the%20community-5865F2?logo=discord&logoColor=white" alt="Join the FocusBae Discord" /></a>
-  <a href="https://github.com/Prateek-Vortex/focusbae/actions/workflows/ci.yml"><img src="https://github.com/Prateek-Vortex/focusbae/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://github.com/focusbae/focusbae/actions/workflows/ci.yml"><img src="https://github.com/focusbae/focusbae/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-black" alt="MIT license" /></a>
   <img src="https://img.shields.io/badge/macOS-26%2B%20·%20Apple%20Silicon-lightgrey?logo=apple" alt="macOS 26+ on Apple Silicon" />
 </p>
@@ -89,7 +89,7 @@ and installed only when you choose.
 You need macOS 26+, Xcode 26+ and Node.js 22.
 
 ```bash
-git clone https://github.com/Prateek-Vortex/focusbae.git
+git clone https://github.com/focusbae/focusbae.git
 cd focusbae
 npm install
 npm start
@@ -117,17 +117,17 @@ detection) and the React UI, then opens the app. See
 Next up: microphone recovery when headphones connect, meeting detection, voices
 recognised across meetings, on-device summaries, audio file import, a Homebrew
 cask and a local MCP server so Claude or ChatGPT can answer "what do I owe Priya?".
-Each item is a [GitHub issue](https://github.com/Prateek-Vortex/focusbae/issues).
+Each item is a [GitHub issue](https://github.com/focusbae/focusbae/issues).
 
 ## Community
 
 **[Join the FocusBae Discord](https://discord.gg/vWugF4Rreb)**: ask questions, share
 how you use it, suggest features and talk to the people building it.
 
-- **Found a bug?** [Open an issue](https://github.com/Prateek-Vortex/focusbae/issues/new/choose).
+- **Found a bug?** [Open an issue](https://github.com/focusbae/focusbae/issues/new/choose).
 - **Want to help?** Start with an issue labelled
-  [`good first issue`](https://github.com/Prateek-Vortex/focusbae/labels/good%20first%20issue)
-  or [`help wanted`](https://github.com/Prateek-Vortex/focusbae/labels/help%20wanted),
+  [`good first issue`](https://github.com/focusbae/focusbae/labels/good%20first%20issue)
+  or [`help wanted`](https://github.com/focusbae/focusbae/labels/help%20wanted),
   and read [CONTRIBUTING.md](CONTRIBUTING.md).
 - **Security issue?** Report it privately; see [SECURITY.md](SECURITY.md).
 

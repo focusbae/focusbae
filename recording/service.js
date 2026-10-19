@@ -51,6 +51,8 @@ function publicRecording(record) {
     issues: record.metadata?.issues ?? [],
     suggestions: record.metadata?.actionExtraction ?? null,
     diarization: record.metadata?.diarization ?? null,
+    gaps: record.metadata?.gaps ?? [],
+    microphones: record.metadata?.microphones ?? [],
     aiState: record.aiState,
   };
 }
@@ -74,6 +76,26 @@ function markEchoes(segments) {
   });
 }
 
+// What a transcript row shows: "You", the person's name, or the detected label.
+function displaySpeaker(speaker) {
+  return speaker.identity?.kind === "self"
+    ? "You"
+    : speaker.identity?.kind === "person"
+      ? speaker.identity.label
+      : speaker.label;
+}
+function publicSegment(speakers) {
+  return ({ id, source, text, startMs, endMs, speakerId, echoOf }) => ({
+    id,
+    source,
+    text,
+    startMs,
+    endMs,
+    speaker: speakers.get(speakerId) ?? null,
+    echoOf,
+  });
+}
+
 function requestId(key) {
   const bytes = createHash("sha256").update(key).digest().subarray(0, 16);
   bytes[6] = (bytes[6] & 15) | 80;
@@ -86,6 +108,7 @@ class RecordingService extends EventEmitter {
     catalog,
     createSource = native.createSource,
     capabilities = native.capabilities,
+    listMicrophones = native.listMicrophones,
     speech = null,
     model = null,
     createEngine = null,
@@ -93,6 +116,12 @@ class RecordingService extends EventEmitter {
     clock = () => performance.now(),
     startTimeout = 15000,
     sourceTimeout = 5000,
+    // A source that fails mid-recording (AirPods connecting, a headset switching
+    // mode, the audio helper exiting) is reopened after each of these delays in turn;
+    // the recording stops only when every attempt fails.
+    recoveryDelays = [300, 1000, 3000],
+    recoveryTimeout = 5000,
+    maxRecoveries = 20,
     silenceTimeout = SILENCE_TIMEOUT_MS,
     maxDuration = MAX_DURATION_MS,
     extractor = null,
@@ -103,10 +132,14 @@ class RecordingService extends EventEmitter {
       catalog,
       createSource,
       capabilities,
+      listMicrophones,
       legacyBusy,
       clock,
       startTimeout,
       sourceTimeout,
+      recoveryDelays,
+      recoveryTimeout,
+      maxRecoveries,
       silenceTimeout,
       maxDuration,
       extractor,
@@ -165,8 +198,12 @@ class RecordingService extends EventEmitter {
       "language",
       "consent",
       "keepAudio",
+      "microphone",
     ]);
     const store = this.catalog.scoped(input.context.workspaceId);
+    // The microphone chosen in the record dialog, by name; null follows the Mac's
+    // default input.
+    const microphone = input.microphone == null ? null : v.text(input.microphone, "microphone", 200);
     const { context, ...args } = input;
     v.choice(
       input.purpose,
@@ -252,6 +289,12 @@ class RecordingService extends EventEmitter {
       sequences: {},
       lastInput: {},
       levels: {},
+      recovering: {},
+      resumeAt: {},
+      microphone: { prefer: microphone, fallback: false },
+      microphones: [],
+      recoveries: 0,
+      gaps: [],
       accepting: true,
       stopping: null,
       startCancelled: false,
@@ -375,40 +418,15 @@ class RecordingService extends EventEmitter {
   }
   async acquire(session, kinds) {
     const acquisitions = kinds.map(async (kind) => {
-      const source = this.createSource(kind);
-      session.sources[kind] = source;
-      session.buffers[kind] = Buffer.alloc(0);
-      session.sequences[kind] = 0;
-      session.levels[kind] = 0;
-      let ready, fail;
-      const received = new Promise((resolve, reject) => {
-        ready = resolve;
-        fail = reject;
-      });
-      session.cancelStart ??= [];
-      session.cancelStart.push(() => fail(new Error("Start cancelled")));
-      source.on("audio", (bytes) => {
-        if (session.accepting) {
-          this.audio(session, kind, bytes);
-          ready();
-        }
-      });
-      source.on("error", () => {
-        fail(new Error("Source unavailable"));
-        if (
-          this.active === session &&
-          this.current(session).state === "recording"
-        )
-          this.stop(session.id, "source").catch(() => {});
-      });
-      const timeout = setTimeout(
-        () => fail(new Error("No audio from selected source")),
-        this.startTimeout,
-      );
       try {
-        await Promise.all([source.start(), received]);
-      } finally {
-        clearTimeout(timeout);
+        await this.open(session, kind, this.createSource(kind, this.sourceOptions(session, kind)), this.startTimeout);
+      } catch (error) {
+        // A Bluetooth headset can take many seconds to deliver audio after it
+        // wakes; rather than fail the start, try the Mac's own microphone once.
+        if (kind !== "microphone" || session.microphone.fallback || session.startCancelled) throw error;
+        await session.sources[kind]?.stop().catch(() => {});
+        session.microphone.fallback = true;
+        await this.open(session, kind, this.createSource(kind, this.sourceOptions(session, kind)), this.startTimeout);
       }
     });
     await Promise.all(acquisitions);
@@ -420,16 +438,14 @@ class RecordingService extends EventEmitter {
       const now = this.clock();
       let reason;
       if (now - session.origin >= this.maxDuration) reason = "duration";
-      else if (
-        Object.values(session.lastInput).some(
-          (time) => now - time >= this.sourceTimeout,
-        )
-      )
-        reason = "source";
       else if (now - session.lastVoice >= this.silenceTimeout)
         reason = "silence";
-      if (reason) this.stop(session.id, reason).catch(() => {});
-      else this.emitChange();
+      if (reason) return void this.stop(session.id, reason).catch(() => {});
+      // A source that stops supplying audio is reopened, not the recording ended.
+      for (const [kind, time] of Object.entries(session.lastInput))
+        if (time !== undefined && now - time >= this.sourceTimeout)
+          this.recover(session, kind);
+      this.emitChange();
     }, 1000);
     session.timer.unref?.();
     this.emitChange();
@@ -447,15 +463,28 @@ class RecordingService extends EventEmitter {
         session.lastInput[kind] !== undefined &&
         now - session.lastInput[kind] > this.sourceTimeout + bytes.length / 32
       ) {
-        this.stop(session.id, "source").catch(() => {});
+        this.recover(session, kind);
         return;
       }
       session.lastInput[kind] = now;
-      if (session.offsets[kind] === undefined)
+      if (session.offsets[kind] === undefined) {
         session.offsets[kind] = Math.max(
           0,
           Math.round(now - session.origin - bytes.length / 32),
         );
+        // After a reopened source, its audio resumes at recording time, so the
+        // microphone and system audio stay aligned. The gap is recorded, not
+        // treated as damage.
+        const resumeAt = session.resumeAt[kind];
+        if (resumeAt !== undefined) {
+          delete session.resumeAt[kind];
+          session.offsets[kind] = Math.max(resumeAt, session.offsets[kind]);
+          if (session.offsets[kind] - resumeAt > 2 && session.gaps.length < 100) {
+            session.gaps.push({ source: kind, fromMs: resumeAt, toMs: session.offsets[kind], reason: "device-change" });
+            session.spool.save({ gaps: session.gaps });
+          }
+        }
+      }
       const level = rms(bytes, 0, bytes.length - (bytes.length % 2));
       session.levels[kind] = Math.min(1, level / 16000);
       if (level > 180) session.lastVoice = now;
@@ -465,6 +494,98 @@ class RecordingService extends EventEmitter {
     } catch {
       session.accepting = false;
       this.stop(session.id, "disk").catch(() => {});
+    }
+  }
+  // Source events count only while the source is the session's current one: a
+  // source replaced during recovery may still emit as it shuts down.
+  attach(session, kind, source, ready = () => {}, fail = () => {}) {
+    source.on("audio", (bytes) => {
+      if (session.accepting && session.sources[kind] === source) {
+        this.audio(session, kind, bytes);
+        ready();
+      }
+    });
+    source.on("error", () => {
+      fail(new Error("Source unavailable"));
+      if (session.sources[kind] === source) this.recover(session, kind);
+    });
+    source.on("device", (name) => {
+      if (session.sources[kind] === source && name && !session.microphones.includes(name) && session.microphones.length < 10)
+        session.microphones.push(name);
+    });
+  }
+  sourceOptions(session, kind) {
+    if (kind !== "microphone") return {};
+    return session.microphone.fallback ? { fallback: true } : { prefer: session.microphone.prefer };
+  }
+  // Makes the source the session's current one and waits for its first audio.
+  async open(session, kind, source, timeoutMs) {
+    session.sources[kind] = source;
+    session.buffers[kind] ??= Buffer.alloc(0);
+    session.sequences[kind] ??= 0;
+    session.levels[kind] ??= 0;
+    let ready, fail;
+    const received = new Promise((resolve, reject) => {
+      ready = resolve;
+      fail = reject;
+    });
+    received.catch(() => {});
+    session.cancelStart ??= [];
+    session.cancelStart.push(() => fail(new Error("Start cancelled")));
+    this.attach(session, kind, source, ready, fail);
+    const timeout = setTimeout(() => fail(new Error("No audio from selected source")), timeoutMs);
+    try {
+      await Promise.all([source.start(), received]);
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+  live(session) {
+    return (
+      this.active === session &&
+      session.accepting &&
+      !session.stopping &&
+      this.current(session).state === "recording"
+    );
+  }
+  async recover(session, kind) {
+    if (!this.live(session) || session.recovering[kind]) return;
+    if (++session.recoveries > this.maxRecoveries)
+      return void this.stop(session.id, "source").catch(() => {});
+    session.recovering[kind] = true;
+    const previous = session.sources[kind];
+    try {
+      delete session.lastInput[kind];
+      const size = session.buffers[kind].length - (session.buffers[kind].length % 2);
+      if (size) this.flushSource(session, kind, size);
+      session.buffers[kind] = Buffer.alloc(0);
+      // A partial flush can end between milliseconds; chunk offsets are whole ones.
+      session.resumeAt[kind] = Math.ceil(session.offsets[kind] ?? this.clock() - session.origin);
+      session.offsets[kind] = undefined;
+      session.levels[kind] = 0;
+      this.emitChange();
+      await previous?.stop().catch(() => {});
+      for (const [attempt, delay] of this.recoveryDelays.entries()) {
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        if (!this.live(session)) return;
+        // The last try is the Mac's own microphone, and once it works the recording
+        // stays on it: a headset that keeps failing must not keep interrupting.
+        if (kind === "microphone" && attempt === this.recoveryDelays.length - 1)
+          session.microphone.fallback = true;
+        const source = this.createSource(kind, this.sourceOptions(session, kind));
+        try {
+          await this.open(session, kind, source, this.recoveryTimeout);
+          return;
+        } catch {
+          if (session.sources[kind] === source) await source.stop().catch(() => {});
+        }
+      }
+      if (this.live(session)) this.stop(session.id, "source").catch(() => {});
+    } catch {
+      session.accepting = false;
+      this.stop(session.id, "disk").catch(() => {});
+    } finally {
+      session.recovering[kind] = false;
     }
   }
   flushSource(session, kind, size) {
@@ -546,6 +667,8 @@ class RecordingService extends EventEmitter {
           reason: REASONS[failure],
           issues,
           durationMs: session.spool.manifest.durationMs,
+          ...(session.gaps.length ? { gaps: session.gaps } : {}),
+          ...(session.microphones.length ? { microphones: session.microphones } : {}),
           ...(session.startError ? { startError: session.startError } : {}),
         },
       });
@@ -854,6 +977,23 @@ class RecordingService extends EventEmitter {
     this.emitChange();
     return { speaker: { id: updated.id, label: updated.label, identity: updated.identity }, attribution };
   }
+  // Every segment of a recording, in order, for copying or export. Echoes are marked
+  // across the whole transcript, not page by page as the view does.
+  fullTranscript(workspaceId, id) {
+    const store = this.catalog.scoped(workspaceId),
+      record = store.get(scope(store), "recording", id);
+    const segments = [];
+    for (let page; (page = store.list(scope(store), "transcript", { recordingId: id, limit: 1000, offset: segments.length })).length;)
+      segments.push(...page);
+    const speakers = new Map(
+      store.list(scope(store), "speaker", { recordingId: id, limit: 1000 })
+        .map((speaker) => [speaker.id, displaySpeaker(speaker)]),
+    );
+    return {
+      recording: publicRecording(record),
+      segments: markEchoes(segments).map(publicSegment(speakers)),
+    };
+  }
   detail(workspaceId, id, offset = 0) {
     const store = this.catalog.scoped(workspaceId),
       record = store.get(scope(store), "recording", id);
@@ -897,36 +1037,19 @@ class RecordingService extends EventEmitter {
         audio.state = "recovery-needed";
       }
     const speakerRows = store.list(scope(store), "speaker", { recordingId: id, limit: 1000 });
-    // What a transcript row shows: "You", the person's name, or the detected label.
-    const display = (speaker) =>
-      speaker.identity?.kind === "self"
-        ? "You"
-        : speaker.identity?.kind === "person"
-          ? speaker.identity.label
-          : speaker.label;
-    const speakers = new Map(speakerRows.map((speaker) => [speaker.id, display(speaker)]));
+    const speakers = new Map(speakerRows.map((speaker) => [speaker.id, displaySpeaker(speaker)]));
     return {
       recording: {
         ...publicRecording(record),
         processingError: record.metadata.processingError ?? null,
       },
-      transcript: markEchoes(transcript).map(
-        ({ id, source, text, startMs, endMs, speakerId, echoOf }) => ({
-          id,
-          source,
-          text,
-          startMs,
-          endMs,
-          speaker: speakers.get(speakerId) ?? null,
-          echoOf,
-        }),
-      ),
+      transcript: markEchoes(transcript).map(publicSegment(speakers)),
       total: count,
       speakers: speakerRows.map((speaker) => ({
         id: speaker.id,
         label: speaker.label,
         identity: speaker.identity ?? { kind: "unknown", id: null, label: null },
-        display: display(speaker),
+        display: displaySpeaker(speaker),
       })),
       noteId: link?.note_id ?? null,
       audio,

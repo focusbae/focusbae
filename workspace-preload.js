@@ -62,6 +62,9 @@ contextBridge.exposeInMainWorld("focusbaeWorkspace", {
       "storage",
       "importWav",
       "exportAudio",
+      "microphones",
+      "copyTranscript",
+      "exportTranscript",
     ].map((name) => [name, (input) => invoke(`capture.${name}`, input)]),
   ),
   onRecording: (listener) => {

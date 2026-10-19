@@ -171,13 +171,19 @@ class Spool {
         issues.push(`Unreadable audio chunk: ${name}`);
       }
     }
+    // A gap the recorder declared -- a source reopened after a device change -- is
+    // expected silence at a known place, not missing audio.
+    const declared = (source, from, to) =>
+      (this.manifest?.gaps ?? []).some(
+        (gap) => gap.source === source && Math.abs(gap.fromMs - from) <= 2 && Math.abs(gap.toMs - to) <= 2,
+      );
     for (const source of SOURCES) {
       let sequence = 0,
         end = null;
       for (const chunk of chunks.filter((item) => item.source === source)) {
         if (
           chunk.sequence !== sequence ||
-          (end !== null && Math.abs(chunk.startMs - end) > 2)
+          (end !== null && Math.abs(chunk.startMs - end) > 2 && !declared(source, end, chunk.startMs))
         )
           issues.push(
             `Gap in ${source} near ${Math.round(chunk.startMs / 1000)}s`,

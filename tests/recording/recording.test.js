@@ -511,12 +511,19 @@ test("worker failure preserves committed transcript segments and retry does not 
   assert.equal(calls, 3);
   assert.equal(detail.recording.transcriptionState, "complete");
 });
+const deadSource = () => {
+  const source = new EventEmitter();
+  source.start = async () => { throw new Error("device gone"); };
+  source.stop = async () => {};
+  return source;
+};
 test("source loss, sleep and storage failure stop sources while retaining durable audio", async (t) => {
   for (const reason of ["source", "sleep", "disk"]) {
-    const f = await fixture(t);
+    const f = await fixture(t, { recoveryDelays: [0, 0, 0] });
     const r = f.service.start(f.input());
     await turn();
     f.sources.microphone.emit("audio", tone());
+    if (reason === "source") f.service.createSource = deadSource;
     if (reason === "disk") {
       f.service.active.spool.append = () => {
         throw Object.assign(new Error("full"), { code: "ENOSPC" });
@@ -735,4 +742,122 @@ test("spool rejects path substitution, missing sequences and incomplete commits"
   const link = path.join(spool.directory, "system-000000.pcm");
   fs.symlinkSync(real, link);
   assert.throws(() => spool.read("system-000000.pcm"), { code: "UNSAFE_PATH" });
+});
+
+test("a source that fails mid-recording is reopened; audio resumes at recording time and the gap is declared", async (t) => {
+  let now = 0;
+  const f = await fixture(t, { clock: () => now, recoveryDelays: [0, 0, 0] });
+  f.modelReady();
+  const r = f.service.start(f.input({ keepAudio: true }));
+  await turn();
+  now = 5000;
+  f.sources.microphone.emit("audio", tone(5));
+  const first = f.sources.microphone;
+  // AirPods connect at 6 s; the new microphone delivers audio from 8 s.
+  now = 8000;
+  first.emit("error", new Error("default input changed"));
+  await until(() => f.sources.microphone !== first && !f.service.active.recovering.microphone);
+  assert.equal(first.stops, 1);
+  first.emit("error", new Error("late error from the replaced source"));
+  first.emit("audio", tone(1));
+  await turn();
+  assert.equal(f.service.active.recoveries, 1, "a replaced source cannot trigger recovery again");
+  now = 13000;
+  f.sources.microphone.emit("audio", tone(5));
+  assert.deepEqual(f.service.active.gaps, [{ source: "microphone", fromMs: 5100, toMs: 7900, reason: "device-change" }]);
+  await f.service.stop(r.id);
+  await until(() => !f.service.busy());
+  const detail = f.service.detail(r.workspaceId, r.id);
+  assert.equal(detail.recording.state, "captured");
+  assert.equal(detail.recording.reason, null);
+  assert.deepEqual(detail.recording.issues, []);
+  assert.equal(detail.recording.gaps.length, 1);
+  assert.equal(detail.recording.transcriptionState, "complete", "a declared gap is not damage");
+  const scan = new Spool(f.catalog.store, r.id).open().scan();
+  assert.deepEqual(scan.issues, []);
+  const resumed = scan.chunks.filter((chunk) => chunk.source === "microphone").map((chunk) => chunk.startMs);
+  assert.deepEqual(resumed, [0, 5000, 7900, 12900]);
+});
+
+test("a source that stops supplying audio is reopened instead of ending the recording", async (t) => {
+  let now = 0;
+  const f = await fixture(t, { clock: () => now, recoveryDelays: [0, 0, 0] });
+  const r = f.service.start(f.input({ sourceMode: "both" }));
+  await turn();
+  const stalled = f.sources.system;
+  now = 3000;
+  f.sources.microphone.emit("audio", tone(0.1));
+  now = 6000;
+  f.sources.microphone.emit("audio", tone(0.1));
+  await until(() => f.sources.system !== stalled);
+  await until(() => !f.service.active.recovering.system);
+  assert.equal(f.service.current(f.service.active).state, "recording");
+  assert.equal(f.service.active.gaps[0].source, "system");
+  await f.service.stop(r.id);
+  assert.equal(f.service.detail(r.workspaceId, r.id).recording.state, "captured");
+});
+
+test("recovery gives up after its bounded attempts and keeps the audio", async (t) => {
+  const f = await fixture(t, { recoveryDelays: [0, 0, 0], maxRecoveries: 20 });
+  const r = f.service.start(f.input());
+  await turn();
+  f.sources.microphone.emit("audio", tone());
+  let attempts = 0;
+  f.service.createSource = () => (attempts++, deadSource());
+  f.sources.microphone.emit("error", new Error("unplugged"));
+  await until(() => !f.service.active);
+  assert.equal(attempts, 3);
+  const detail = f.service.detail(r.workspaceId, r.id);
+  assert.equal(detail.recording.state, "interrupted");
+  assert.match(detail.recording.reason, /stopped supplying audio/);
+});
+
+test("the chosen microphone is opened by name, and a failing one falls back to the built-in microphone and stays there", async (t) => {
+  let now = 0;
+  const f = await fixture(t, { clock: () => now, recoveryDelays: [0, 0, 0] });
+  const opened = [];
+  const create = f.service.createSource;
+  let failing = 0;
+  f.service.createSource = (kind, options) => {
+    opened.push(options);
+    return failing-- > 0 ? deadSource() : create(kind);
+  };
+  assert.throws(() => f.service.start(f.input({ microphone: 5 })), { code: "INVALID_INPUT" });
+  const r = f.service.start(f.input({ microphone: "AirPods Pro" }));
+  await turn();
+  assert.deepEqual(opened, [{ prefer: "AirPods Pro" }]);
+  f.sources.microphone.emit("device", "AirPods Pro");
+  now = 5000;
+  f.sources.microphone.emit("audio", tone(5));
+  // The headset stops; it fails twice more, so the third try is the Mac's own.
+  failing = 2;
+  f.sources.microphone.emit("error", new Error("headset gone"));
+  await until(() => opened.length === 4 && !f.service.active.recovering.microphone);
+  assert.deepEqual(opened.slice(1), [{ prefer: "AirPods Pro" }, { prefer: "AirPods Pro" }, { fallback: true }]);
+  f.sources.microphone.emit("device", "MacBook Air Microphone (Built-in)");
+  f.sources.microphone.emit("error", new Error("default input changed again"));
+  await until(() => opened.length === 5 && !f.service.active.recovering.microphone);
+  assert.deepEqual(opened[4], { fallback: true }, "stays on the built-in microphone");
+  await f.service.stop(r.id);
+  assert.deepEqual(f.service.detail(r.workspaceId, r.id).recording.microphones,
+    ["AirPods Pro", "MacBook Air Microphone (Built-in)"]);
+});
+
+test("a microphone that never delivers audio at the start is retried once as the built-in microphone", async (t) => {
+  const f = await fixture(t, { startTimeout: 50 });
+  const opened = [];
+  const create = f.service.createSource;
+  f.service.createSource = (kind, options) => {
+    opened.push(options);
+    if (options.fallback) return create(kind);
+    const silent = new EventEmitter();
+    silent.start = async () => {};
+    silent.stop = async () => { silent.stops = (silent.stops ?? 0) + 1; };
+    return silent;
+  };
+  const r = f.service.start(f.input());
+  await until(() => f.service.active && f.service.current(f.service.active).state === "recording");
+  assert.deepEqual(opened, [{ prefer: null }, { fallback: true }]);
+  await f.service.stop(r.id);
+  assert.equal(f.service.detail(r.workspaceId, r.id).recording.state, "captured");
 });

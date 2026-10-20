@@ -26,6 +26,14 @@ CREATE TABLE IF NOT EXISTS people (id TEXT PRIMARY KEY, name TEXT NOT NULL, emai
 CREATE TABLE IF NOT EXISTS commitments (id TEXT PRIMARY KEY, version INTEGER NOT NULL, data_json TEXT NOT NULL CHECK(json_valid(data_json))) STRICT;
 -- What this Mac last sent for each of its own actions, so unchanged ones are not resent.
 CREATE TABLE IF NOT EXISTS shared (action_id TEXT PRIMARY KEY, sent_hash TEXT NOT NULL, server_version INTEGER) STRICT;
+-- Who the team sees as owing an action and who it is owed to, chosen on this Mac.
+-- Absent = the default (the action's own owner; the one other named person, if any).
+CREATE TABLE IF NOT EXISTS mappings (
+  action_id TEXT PRIMARY KEY,
+  owner_person_id TEXT,
+  counterparty_person_id TEXT,
+  updated_at TEXT NOT NULL
+) STRICT;
 `;
 
 class TeamState {
@@ -85,7 +93,7 @@ class TeamState {
   // Removed from the workspace: keep the binding as a marker, forget everything synced.
   markRemoved() {
     this.db.transaction(() => {
-      for (const table of ["spaces", "people", "commitments", "shared"]) this.db.prepare(`DELETE FROM ${table}`).run();
+      for (const table of ["spaces", "people", "commitments", "shared", "mappings"]) this.db.prepare(`DELETE FROM ${table}`).run();
       this.db.prepare("UPDATE binding SET status = 'removed', cursor = 0").run();
     })();
   }
@@ -107,6 +115,18 @@ class TeamState {
       .run(actionId, hash, version ?? null);
   }
   forgetSent(actionId) { this.db.prepare("DELETE FROM shared WHERE action_id = ?").run(actionId); }
+  mapping(actionId) {
+    const row = this.db.prepare("SELECT owner_person_id AS ownerPersonId, counterparty_person_id AS counterpartyPersonId FROM mappings WHERE action_id = ?").get(actionId);
+    return row ?? null;
+  }
+  setMapping(actionId, mapping) {
+    const people = new Set(this.people().map((p) => p.id));
+    for (const id of [mapping.ownerPersonId, mapping.counterpartyPersonId])
+      if (id !== null && !people.has(id)) throw Object.assign(new Error("Unknown person"), { code: "INVALID_INPUT" });
+    this.db.prepare(`INSERT INTO mappings VALUES (?, ?, ?, ?) ON CONFLICT(action_id) DO UPDATE SET
+      owner_person_id = excluded.owner_person_id, counterparty_person_id = excluded.counterparty_person_id, updated_at = excluded.updated_at`)
+      .run(actionId, mapping.ownerPersonId, mapping.counterpartyPersonId, new Date().toISOString());
+  }
   sharedIds() { return this.db.prepare("SELECT action_id FROM shared").all().map((row) => row.action_id); }
   close() { if (this.db.open) this.db.close(); }
 }

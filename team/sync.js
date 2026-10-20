@@ -31,17 +31,62 @@ function sourceOf(store, workspaceId, action) {
   }
 }
 
+// People in the conversation an action was quoted from, as the person named them.
+function conversationPeople(store, workspaceId, action) {
+  const evidence = action.evidence?.[0];
+  if (!evidence || evidence.sourceKind === "note") return { named: [], selfSpoke: false };
+  try {
+    const segment = store.get({ workspaceId }, "transcript", evidence.segmentId, { includeDeleted: true });
+    const speakers = store.list({ workspaceId }, "speaker", { recordingId: segment.recordingId, limit: 1000 });
+    const named = [...new Set(speakers.filter((s) => s.identity?.kind === "person").map((s) => s.identity.label))];
+    return { named, selfSpoke: speakers.some((s) => s.identity?.kind === "self") };
+  } catch {
+    return { named: [], selfSpoke: false };
+  }
+}
+
+const byName = (people, label) => people.find((p) => p.name.toLowerCase() === String(label).trim().toLowerCase()) ?? null;
+
+// Who the team sees as owing an action and who it is owed to. An explicit choice made
+// on this Mac wins; otherwise the action's own owner, and an "owed to" only when the
+// conversation makes it unambiguous (exactly one other identified person).
+function sharedPeople(store, workspaceId, action, state) {
+  const people = state?.people() ?? [];
+  const me = state?.binding()?.mePersonId ?? null;
+  const chosen = state?.mapping(action.id) ?? null;
+  let owner = null;
+  if (chosen?.ownerPersonId) owner = { personId: chosen.ownerPersonId };
+  // "self" rather than this person's id, so learning that id on the first pull does
+  // not change what was sent; the server resolves it to the same person.
+  else if (action.owner?.kind === "self") owner = { self: true };
+  else if (action.owner?.kind === "person" && action.ownerLabel) {
+    const match = byName(people, action.ownerLabel);
+    owner = match ? { personId: match.id } : { name: action.ownerLabel };
+  }
+  let counterparty = null;
+  let suggested = false;
+  if (chosen) counterparty = chosen.counterpartyPersonId ? { personId: chosen.counterpartyPersonId } : null;
+  else {
+    const { named, selfSpoke } = conversationPeople(store, workspaceId, action);
+    const candidates = named.map((label) => byName(people, label)?.id).filter(Boolean);
+    if (selfSpoke && me) candidates.push(me);
+    const ownerId = owner?.self ? me : owner?.personId;
+    const others = [...new Set(candidates)].filter((id) => id !== ownerId);
+    if (others.length === 1) { counterparty = { personId: others[0] }; suggested = true; }
+  }
+  return { owner, counterparty, suggested, chosen: !!chosen };
+}
+
 // What a teammate sees of one local action. Audio, transcripts and notes stay here;
 // only the commitment, its quote and where it was said are shared.
-function payloadFor(store, workspaceId, action) {
-  const owner = action.owner?.kind === "self" ? { self: true }
-    : action.owner?.kind === "person" && action.ownerLabel ? { name: action.ownerLabel } : null;
+function payloadFor(store, workspaceId, action, state = null) {
+  const { owner, counterparty } = sharedPeople(store, workspaceId, action, state);
   return {
     title: action.title,
     status: action.status,
     dueDate: action.dueDate ?? (action.dueAt ? action.dueAt.slice(0, 10) : null),
     owner,
-    counterparty: null,
+    counterparty,
     ...sourceOf(store, workspaceId, action),
   };
 }
@@ -59,7 +104,7 @@ function plan(store, state) {
     localIds.add(action.id);
     const sent = state.sent(action.id);
     if (!action.deletedAt && SHAREABLE.has(action.status)) {
-      const payload = payloadFor(store, workspaceId, action);
+      const payload = payloadFor(store, workspaceId, action, state);
       const hash = hashOf(payload);
       if (!sent || sent.hash !== hash) shares.push({ id: action.id, payload, hash, version: sent?.version ?? null });
       statusOnly.set(action.id, action.status);
@@ -78,10 +123,15 @@ async function exchange(account, state, work) {
   const errors = [];
   for (const share of work.shares) {
     try {
-      const row = await account.rpc("share_commitment", { p_workspace: ws, p_id: share.id, p_input: share.payload });
+      const row = await account.rpc("share_commitment", {
+        p_workspace: ws, p_id: share.id, p_input: share.payload, p_version: share.version,
+      });
       sent.push({ id: share.id, hash: share.hash, version: row.version });
     } catch (error) {
       if (error.code === "POLICY_DENIED" || error.code === "SIGNED_OUT") throw error;
+      // Someone changed it since this Mac last saw it: their change arrives with the
+      // pull below and the next round resends on top of it.
+      if (error.code === "VERSION_CONFLICT") continue;
       // The owner may only change status (e.g. after leaving the team): send just that.
       if (error.code === "FORBIDDEN" && share.version !== null) {
         try {
@@ -141,10 +191,16 @@ function apply(store, state, result) {
       });
     }
     if (steps.length && local.status === remote.status) applied++;
-    state.markSent(remote.id, hashOf(payloadFor(store, workspaceId, local)), remote.version);
+    // Record what the server now holds. If this Mac also changed something else
+    // meanwhile (the title, the due date), leave it unsent so the next round sends it
+    // on top of the teammate's change instead of dropping it.
+    const payload = payloadFor(store, workspaceId, local, state);
+    const inStep = payload.title === remote.title && payload.status === remote.status
+      && (payload.dueDate ?? null) === (remote.due_date ?? null);
+    state.markSent(remote.id, inStep ? hashOf(payload) : "", remote.version);
   }
   if (result.errors.length) state.recordError(result.errors[0]);
   return { removed: false, applied };
 }
 
-module.exports = { plan, exchange, apply, payloadFor, hashOf };
+module.exports = { plan, exchange, apply, payloadFor, sharedPeople, hashOf };

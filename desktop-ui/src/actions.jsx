@@ -15,6 +15,7 @@ import {
   LoaderCircle,
   BellOff,
 } from "lucide-react";
+import { TeamShare } from "./team-share";
 import "./actions.css";
 const api = window.focusbaeWorkspace;
 const views = [
@@ -513,6 +514,15 @@ export function Actions({ workspace, refreshKey, openRecording, openNote, initia
               />
             </div>
             <Fields value={draft} setValue={setDraft} disabled={busy} />
+            {shared && (
+              <TeamShare
+                workspaceId={workspace.id}
+                actionId={action.id}
+                status={action.status}
+                teamName={shared.name}
+                disabled={busy}
+              />
+            )}
             {error && (
               <p className="action-error" role="alert">
                 {error.message}

@@ -114,6 +114,8 @@ const CHANNELS = [
   "team.join",
   "team.sync",
   "team.ledger",
+  "team.mapping",
+  "team.setMapping",
 ];
 const PUBLIC_ERRORS = {
   ATTACHMENT_TOO_LARGE: "This file is larger than 100 MB. Choose a smaller file.",
@@ -1038,6 +1040,20 @@ function registerWorkspaceIPC({
       return value;
     },
     "team.sync": async () => { await teamService().syncNow(); return team.snapshot(); },
+    "team.mapping": (input) => {
+      v.object(input, ["workspaceId", "actionId"]);
+      catalog.scoped(input.workspaceId);
+      return teamService().mapping(v.uuid(input.actionId));
+    },
+    "team.setMapping": (input) => {
+      v.object(input, ["workspaceId", "actionId", "ownerPersonId", "counterpartyPersonId"]);
+      catalog.scoped(input.workspaceId);
+      const person = (value) => (value === null ? null : v.uuid(value, "person id"));
+      return teamService().setMapping(v.uuid(input.actionId), {
+        ownerPersonId: person(input.ownerPersonId),
+        counterpartyPersonId: person(input.counterpartyPersonId),
+      });
+    },
     "team.ledger": (input) => {
       v.object(input, ["workspaceId"]);
       catalog.scoped(input.workspaceId);

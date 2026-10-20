@@ -297,3 +297,40 @@
   color: var(--muted);
   font-size: 11px;
 }
+
+/* Team workspaces: who the team sees as owing an action, and who it is owed to. */
+.team-share {
+  margin: 18px 0 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  min-width: 0;
+}
+.team-share legend {
+  padding: 0 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.team-share-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.team-share-row label span {
+  display: block;
+  margin-bottom: 7px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.team-share-row select {
+  width: 100%;
+}
+.team-share .muted {
+  margin: 8px 0 0;
+  font-size: 11px;
+}
+@media (max-width: 560px) {
+  .team-share-row {
+    grid-template-columns: 1fr;
+  }
+}

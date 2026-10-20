@@ -151,6 +151,50 @@ class TeamService extends EventEmitter {
     }
   }
 
+  // Who the team will see as owing an action and who it is owed to, with the directory
+  // to choose from. Read inside the workspace queue so the action and state agree.
+  mapping(actionId) {
+    return this.catalog.serialize(async () => {
+      const state = this.#activeState();
+      if (!state) throw fail("NOT_FOUND", "This is not a team workspace");
+      try {
+        const store = this.catalog.store;
+        const workspaceId = store.identity.id;
+        const action = store.get({ workspaceId }, "action", actionId);
+        const shared = sync.sharedPeople(store, workspaceId, action, state);
+        const me = state.binding().mePersonId;
+        const id = (who) => (who?.self ? me : who?.personId ?? null);
+        return {
+          people: state.people(),
+          me,
+          ownerPersonId: id(shared.owner),
+          ownerName: shared.owner?.name ?? null,
+          counterpartyPersonId: id(shared.counterparty),
+          suggested: shared.suggested,
+          chosen: shared.chosen,
+        };
+      } finally {
+        state.close();
+      }
+    });
+  }
+
+  async setMapping(actionId, mapping) {
+    await this.catalog.serialize(async () => {
+      const state = this.#activeState();
+      if (!state) throw fail("NOT_FOUND", "This is not a team workspace");
+      try {
+        const store = this.catalog.store;
+        store.get({ workspaceId: store.identity.id }, "action", actionId);
+        state.setMapping(actionId, mapping);
+      } finally {
+        state.close();
+      }
+    });
+    this.localChanged();
+    return this.mapping(actionId);
+  }
+
   // The shared ledger of the open team workspace, for the Team view.
   ledger() {
     const state = this.#activeState();

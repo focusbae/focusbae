@@ -80,7 +80,7 @@ function assetPath(raw) {
   }
 }
 
-function initialize({ privacy, busy, desktopSettings, onRecordingChange = () => {} }) {
+function initialize({ privacy, busy, desktopSettings, onRecordingChange = () => {}, teamOptions = null }) {
   clipboardHistory = new (require("./workspace/clipboard-history").ClipboardHistory)(require("electron").clipboard);
   clipboardHistory.on("change", (value) => {
     if (win && !win.isDestroyed()) win.webContents.send("workspace:clipboard-event", value);
@@ -191,7 +191,25 @@ function initialize({ privacy, busy, desktopSettings, onRecordingChange = () => 
   models.embedding = semantic;
   const attachments = new NoteAttachments(catalog);
   app.once("will-quit", () => attachments.close());
+  // Team workspaces exist only when the team service address is configured, and sync
+  // only after the person connects an account; until then nothing here touches the network.
+  let team = null;
+  if (teamOptions) {
+    const { TeamAccount } = require("./team/account");
+    const { SessionStore } = require("./team/session");
+    const { TeamService } = require("./team/service");
+    const account = new TeamAccount({
+      teamUrl: teamOptions.teamUrl,
+      sessions: new SessionStore(path.join(app.getPath("userData"), "team"), teamOptions.safeStorage),
+      policy: privacy.policy,
+      openExternal: teamOptions.openExternal,
+    });
+    team = new TeamService({ account, catalog, policy: privacy.policy });
+    ready().then(() => team.start()).catch(() => {});
+    app.once("will-quit", () => team.stop());
+  }
   registerWorkspaceIPC({
+    team,
     attachments,
     ipcMain,
     catalog,

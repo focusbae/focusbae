@@ -30,6 +30,16 @@ contextBridge.exposeInMainWorld("focusbaeWorkspace", {
     ipcRenderer.on("workspace:backup-event", handler);
     return () => ipcRenderer.removeListener("workspace:backup-event", handler);
   },
+  team: Object.fromEntries(
+    ["state", "connect", "cancelConnect", "disconnect", "remoteWorkspaces", "join", "sync", "ledger"].map(
+      (name) => [name, (input) => invoke(`team.${name}`, input)],
+    ),
+  ),
+  onTeam: (listener) => {
+    const handler = (_event, value) => listener(value);
+    ipcRenderer.on("workspace:team-event", handler);
+    return () => ipcRenderer.removeListener("workspace:team-event", handler);
+  },
   onClipboard: (listener) => {
     const handler = (_event, value) => listener(value);
     ipcRenderer.on("workspace:clipboard-event", handler);

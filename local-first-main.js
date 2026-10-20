@@ -2,7 +2,7 @@
 // Local desktop entry. Connected calling, legacy capture and onboarding are not loaded.
 const fs = require("node:fs");
 const path = require("node:path");
-const { app, Menu, Tray, nativeImage, globalShortcut, dialog, session } = require("electron");
+const { app, Menu, Tray, nativeImage, globalShortcut, dialog, session, shell, safeStorage } = require("electron");
 const privacy = require("./privacy/local-runtime");
 const { installSessionPolicy } = require("./privacy/local-electron-session");
 const workspace = require("./workspace-window");
@@ -154,8 +154,10 @@ else {
   app.whenReady().then(() => {
     privacy.initialize({ app, dialog });
     installSessionPolicy(session.defaultSession, privacy.policy);
+    const teamUrl = require("./team/service").teamUrl();
     workspace.initialize({
       privacy, busy: () => false, onRecordingChange: refreshTray,
+      teamOptions: teamUrl ? { teamUrl, safeStorage, openExternal: (url) => shell.openExternal(url) } : null,
       desktopSettings: {
         get: () => ({ shortcuts: { ...shortcuts }, openAtLogin: app.getLoginItemSettings().openAtLogin,
           showInDock: showInDock(),

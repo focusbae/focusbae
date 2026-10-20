@@ -32,6 +32,7 @@ import { Actions } from "./actions";
 import { People } from "./people";
 import { WelcomeNotice, WorkspaceGuide } from "./welcome";
 import { AppSettings } from "./app-settings";
+import { TeamSettings, useTeamWorkspaces } from "./team-settings";
 import {
   useRecording,
   RecordDialog,
@@ -473,6 +474,7 @@ function Preferences({ workspace, privacy, run, saved, models, openGuide, openCl
       </section>
       <AppleNotesImport key={`apple-${workspace.id}`} workspaceId={workspace.id} run={run} />
       <BackupSettings key={workspace.id} workspaceId={workspace.id} run={run} openWorkspace={openWorkspace} />
+      <TeamSettings openWorkspace={openWorkspace} />
       <section aria-labelledby="privacy-title">
         <h2 id="privacy-title">Privacy</h2>
         <div className="setting-row">
@@ -530,6 +532,7 @@ function Preferences({ workspace, privacy, run, saved, models, openGuide, openCl
 
 function App() {
   const [state, setState] = useState(null);
+  const teamBindings = useTeamWorkspaces();
   const [error, setError] = useState(null);
   const [page, setPage] = useState("Today");
   const [collapsed, setCollapsed] = useState(false);
@@ -741,6 +744,7 @@ function App() {
       </main>
     );
   const { workspace, workspaces, privacy } = state;
+  const shared = teamBindings.get(workspace.id);
   return (
     <div className={`app ${collapsed ? "collapsed" : ""}`}>
       <aside className="sidebar">
@@ -768,6 +772,7 @@ function App() {
             {workspaces.map((item) => (
               <option key={item.id} value={item.id}>
                 {item.id === workspace.id ? workspace.name : item.name}
+                {teamBindings.has(item.id) ? " · team" : ""}
               </option>
             ))}
           </select>
@@ -956,6 +961,7 @@ function App() {
             <Actions
               key={`${workspace.id}:${actionTarget?.id ?? ""}`}
               workspace={workspace}
+              shared={shared}
               initial={actionTarget}
               refreshKey={state.sequence}
               openNote={(id) => {

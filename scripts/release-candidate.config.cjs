@@ -20,7 +20,7 @@ module.exports = {
     'local-ai/fluid-helpers/manifests/**/*', 'local-ai/bin/**/*',
     'privacy/local-runtime.js', 'privacy/local-policy.js',
     'privacy/local-network.js', 'privacy/local-electron-session.js',
-    'update/local-updater.js',
+    'update/local-updater.js', 'team/**/*',
     '!**/.env*', '!**/*.p12', '!**/*.p8', '!**/*.pem',
     '!**/*.key', '!**/*.keychain*',
   ],

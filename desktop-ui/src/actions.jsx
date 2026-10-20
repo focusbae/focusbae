@@ -247,7 +247,7 @@ function NewAction({ workspaceId, close, created }) {
   );
 }
 // `initial` opens a specific action (from People) in its list view.
-export function Actions({ workspace, refreshKey, openRecording, openNote, initial }) {
+export function Actions({ workspace, refreshKey, openRecording, openNote, initial, shared = null }) {
   const [view, setView] = useState(initial?.view ?? "mine");
   const [listing, setListing] = useState(null);
   const [selectedId, setSelectedId] = useState(initial?.id ?? null);
@@ -358,7 +358,11 @@ export function Actions({ workspace, refreshKey, openRecording, openNote, initia
         <div className="action-library-heading">
           <div>
             <h2>Actions</h2>
-            <p className="muted">Stored in {workspace.name}</p>
+            <p className="muted">
+              {shared
+                ? `Shared with ${shared.name}: accepted actions and their quotes are visible to your team`
+                : `Stored in ${workspace.name}`}
+            </p>
           </div>
           <Tool
             label="New action"

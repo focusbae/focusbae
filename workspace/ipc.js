@@ -106,6 +106,14 @@ const CHANNELS = [
   "models.download",
   "models.import",
   "models.installLanguage",
+  "team.state",
+  "team.connect",
+  "team.cancelConnect",
+  "team.disconnect",
+  "team.remoteWorkspaces",
+  "team.join",
+  "team.sync",
+  "team.ledger",
 ];
 const PUBLIC_ERRORS = {
   ATTACHMENT_TOO_LARGE: "This file is larger than 100 MB. Choose a smaller file.",
@@ -164,6 +172,14 @@ const PUBLIC_ERRORS = {
   STALE_SOURCE:
     "The supporting transcript changed. Review the source before accepting this suggestion.",
   INVALID_EVIDENCE: "The supporting transcript quote is no longer valid.",
+  TEAM_UNAVAILABLE: "Team workspaces are not available in this version of FocusBae.",
+  SIGNED_OUT: "Connect your team account in Settings, then try again.",
+  CONNECT_TIMEOUT: "Connecting took too long. Try again from Settings.",
+  CANCELLED: "Connecting was cancelled.",
+  INVALID_GRANT: "The team service did not accept this connection. Try again.",
+  KEYCHAIN_UNAVAILABLE: "FocusBae could not use the macOS Keychain to store your team sign-in.",
+  ALREADY_EXISTS: "That team workspace is already on this Mac.",
+  FORBIDDEN: "You don't have access to that team workspace.",
 };
 function publicError(error) {
   const code = Object.hasOwn(PUBLIC_ERRORS, error.code)
@@ -209,6 +225,7 @@ function registerWorkspaceIPC({
   playback,
   appleNotes,
   clipboard,
+  team = null,
   attachments = new (require("./note-attachments").NoteAttachments)(catalog),
 }) {
   const emit = (type = "workspace.changed", entity) => {
@@ -223,6 +240,11 @@ function registerWorkspaceIPC({
         sequence: ++catalog.sequence,
       });
     }
+    if (typeof type === "string" && type.startsWith("action")) team?.localChanged();
+  };
+  const teamService = () => {
+    check(team, "TEAM_UNAVAILABLE", "Team workspaces are not configured");
+    return team;
   };
   const transcriptDocument = (input, format) => {
     const store = catalog.scoped(input.workspaceId);
@@ -993,6 +1015,34 @@ function registerWorkspaceIPC({
       privacy.policy.revoke(v.choice(input.purpose, ["models", "updates"], "permission"));
       return privacy.policy.snapshot();
     },
+    "team.state": () => (team ? team.snapshot() : { available: false }),
+    "team.connect": async () => {
+      await teamService().account.connect();
+      return team.snapshot();
+    },
+    "team.cancelConnect": () => { teamService().account.cancelConnect(); return team.snapshot(); },
+    "team.disconnect": async () => {
+      const result = await dialog.showMessageBox(getWindow(), {
+        type: "question", buttons: ["Disconnect", "Cancel"], defaultId: 1, cancelId: 1,
+        message: "Disconnect your team account from this Mac?",
+        detail: "Team workspaces stop syncing until you connect again. Nothing is deleted from this Mac or from your team.",
+      });
+      if (result.response === 0) teamService().account.disconnect();
+      return team.snapshot();
+    },
+    "team.remoteWorkspaces": () => teamService().remoteWorkspaces(),
+    "team.join": async (input) => {
+      v.object(input, ["serverWorkspaceId"]);
+      const value = await teamService().join(v.uuid(input.serverWorkspaceId));
+      emit();
+      return value;
+    },
+    "team.sync": async () => { await teamService().syncNow(); return team.snapshot(); },
+    "team.ledger": (input) => {
+      v.object(input, ["workspaceId"]);
+      catalog.scoped(input.workspaceId);
+      return teamService().ledger();
+    },
     "privacy.setStrict": async (input) => {
       v.object(input, ["enabled"]);
       v.boolean(input.enabled, "enabled");
@@ -1033,6 +1083,12 @@ function registerWorkspaceIPC({
             "capture.state",
             "models.state",
             "semantic.status",
+            "team.state",
+            "team.connect",
+            "team.cancelConnect",
+            "team.disconnect",
+            "team.remoteWorkspaces",
+            "team.sync",
           ].includes(name)
         )
           v.object(input, []);
@@ -1074,7 +1130,7 @@ function registerWorkspaceIPC({
             emit("notes.changed", value?.id ? value : value?.items?.at(-1));
           return { ok: true, value };
         };
-        return ["search.hybrid", "semantic.status", "notes.findCommitments", "appSettings.checkForUpdates", "appSettings.downloadUpdate", "appSettings.installUpdate"].includes(name)
+        return ["search.hybrid", "semantic.status", "notes.findCommitments", "appSettings.checkForUpdates", "appSettings.downloadUpdate", "appSettings.installUpdate"].includes(name) || name.startsWith("team.")
           ? await operation()
           : await catalog.serialize(operation);
       } catch (error) {
@@ -1082,7 +1138,16 @@ function registerWorkspaceIPC({
       }
     });
   privacy.policy.on("change", emit);
+  const teamEvent = () => {
+    const win = getWindow();
+    if (team && win && !win.isDestroyed()) win.webContents.send("workspace:team-event", team.snapshot());
+  };
+  const teamActions = () => emit("actions.changed");
+  team?.on("change", teamEvent);
+  team?.on("actions-changed", teamActions);
   return () => {
+    team?.removeListener("change", teamEvent);
+    team?.removeListener("actions-changed", teamActions);
     attachments.close();
     for (const name of CHANNELS) ipcMain.removeHandler(`workspace:${name}`);
     privacy.policy.removeListener("change", emit);

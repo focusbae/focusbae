@@ -195,6 +195,43 @@ class TeamService extends EventEmitter {
     return this.mapping(actionId);
   }
 
+  // Which team a note on this Mac belongs to, and the teams it could move to.
+  noteVisibility(noteId) {
+    return this.catalog.serialize(async () => {
+      const state = this.#activeState();
+      if (!state) throw fail("NOT_FOUND", "This is not a team workspace");
+      try {
+        const store = this.catalog.store;
+        store.get({ workspaceId: store.identity.id }, "note", noteId);
+        const privateSpace = state.privateSpaceId();
+        return {
+          spaceId: state.noteSpace(noteId) ?? privateSpace,
+          privateSpaceId: privateSpace,
+          options: state.spaces().filter((s) => s.role === "editor").map((s) => ({ id: s.id, kind: s.kind, name: s.name })),
+          synced: !!state.noteSent(noteId),
+        };
+      } finally {
+        state.close();
+      }
+    });
+  }
+
+  async setNoteVisibility(noteId, spaceId) {
+    await this.catalog.serialize(async () => {
+      const state = this.#activeState();
+      if (!state) throw fail("NOT_FOUND", "This is not a team workspace");
+      try {
+        const store = this.catalog.store;
+        store.get({ workspaceId: store.identity.id }, "note", noteId);
+        state.setNoteSpace(noteId, spaceId);
+      } finally {
+        state.close();
+      }
+    });
+    this.localChanged();
+    return this.noteVisibility(noteId);
+  }
+
   // The shared ledger of the open team workspace, for the Team view.
   ledger() {
     const state = this.#activeState();

@@ -768,3 +768,10 @@ select.note-folder:focus-visible {
 .tiptap .attachment-card span { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
 .tiptap .attachment-image .attachment-card { margin-top: 4px; padding: 8px 0; border-color: transparent; background: transparent; }
 .note-attachment.ProseMirror-selectednode { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 10px; }
+
+/* Team workspaces: who can see a page. */
+.note-visibility-error {
+  margin-left: 8px;
+  color: var(--danger, #9b3b2e);
+  font-size: 11px;
+}

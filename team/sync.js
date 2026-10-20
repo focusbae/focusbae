@@ -4,6 +4,11 @@ const { ACTION_TRANSITIONS } = require("../workspace/domain");
 
 const SHAREABLE = new Set(["accepted", "deferred", "done", "dropped"]);
 const PAGE = 1000;
+// The team service's storage limit per file; larger files stay on this Mac.
+const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+// Bounds the memory one round holds for uploads; the rest go in later rounds.
+const UPLOAD_BUDGET_BYTES = 120 * 1024 * 1024;
+const WEB_IMAGES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 
 function listAll(store, workspaceId, kind) {
   const rows = [];
@@ -112,7 +117,50 @@ function plan(store, state) {
   }
   // Shared before but gone from this workspace entirely (purged): withdraw it too.
   for (const id of state.sharedIds()) if (!localIds.has(id)) unshares.push(id);
-  return { shares, unshares, statusOnly };
+  return { shares, unshares, statusOnly, ...planNotes(store, state) };
+}
+
+// Notes go to My notes unless the person chose a team. Until the first pull says which
+// space is My notes, notes wait; nothing is sent to a guessed place.
+function planNotes(store, state) {
+  const workspaceId = store.identity.id;
+  const privateSpace = state.privateSpaceId();
+  const notes = [];
+  const deletions = [];
+  const uploads = [];
+  let budget = UPLOAD_BUDGET_BYTES;
+  if (!privateSpace) return { notes, deletions, uploads };
+  const live = new Set();
+  for (const note of listAll(store, workspaceId, "note")) {
+    if (note.deletedAt || note.metadata?.purgedAt) continue;
+    live.add(note.id);
+    const payload = { spaceId: state.noteSpace(note.id) ?? privateSpace, title: note.title, content: note.content, text: note.plainText };
+    const hash = hashOf(payload);
+    const sent = state.noteSent(note.id);
+    if (!sent || sent.hash !== hash) notes.push({ id: note.id, payload, hash, version: sent?.version ?? null });
+    for (const attachmentId of require("../workspace/content").attachmentIds(note.content)) {
+      const upload = planUpload(store, workspaceId, note.id, attachmentId, state, budget);
+      if (upload) { uploads.push(upload); budget -= upload.bytes?.length ?? 0; }
+    }
+  }
+  for (const id of state.sentNoteIds()) if (!live.has(id)) deletions.push(id);
+  return { notes, deletions, uploads };
+}
+
+// One attachment to send, if it is new or changed since it was last sent. Browsers
+// cannot show HEIC, so a photo with a PNG preview sends the preview.
+function planUpload(store, workspaceId, noteId, attachmentId, state, budget) {
+  let record;
+  try { record = store.get({ workspaceId }, "attachment", attachmentId); } catch { return null; }
+  const sent = state.attachmentSent(attachmentId);
+  if (sent && sent.contentHash === record.contentHash) return null;
+  const preview = record.previewId ? store.get({ workspaceId }, "attachment", record.previewId) : null;
+  const source = preview && WEB_IMAGES.has(preview.mediaType) ? preview : record;
+  const meta = { noteId, id: attachmentId, contentHash: record.contentHash, fileName: record.displayName,
+    mimeType: source.mediaType, byteSize: source.byteSize };
+  if (source.byteSize > MAX_UPLOAD_BYTES) return { ...meta, bytes: null };
+  if (source.byteSize > budget) return null;
+  return { ...meta, bytes: store.readAttachment({ workspaceId }, source.id) };
 }
 
 // Phase 2, network: push, then pull. Returns what phase 3 needs.
@@ -154,11 +202,53 @@ async function exchange(account, state, work) {
       else errors.push(error.message);
     }
   }
+  const notesSent = [];
+  const notesDeleted = [];
+  const uploaded = [];
+  const rethrow = (error) => { if (error.code === "POLICY_DENIED" || error.code === "SIGNED_OUT") throw error; };
+  for (const note of work.notes ?? []) {
+    try {
+      const row = await account.rpc("upsert_note", {
+        p_workspace: ws, p_id: note.id, p_space: note.payload.spaceId, p_title: note.payload.title,
+        p_content: note.payload.content, p_text: note.payload.text, p_version: note.version,
+      });
+      notesSent.push({ id: note.id, hash: note.hash, version: row.version });
+    } catch (error) {
+      rethrow(error);
+      if (error.code !== "VERSION_CONFLICT") errors.push(error.message);
+    }
+  }
+  // Attachments only after their note exists on the server; storage checks the note.
+  const sentNow = new Set(notesSent.map((n) => n.id));
+  for (const upload of work.uploads ?? []) {
+    if (!sentNow.has(upload.noteId) && !state.noteSent(upload.noteId)) continue;
+    try {
+      if (upload.bytes) await account.upload("note-attachments", `${ws}/${upload.noteId}/${upload.id}`, upload.bytes, upload.mimeType);
+      await account.rpc("register_note_attachment", {
+        p_note: upload.noteId, p_attachment: upload.id, p_file_name: upload.fileName, p_mime_type: upload.mimeType,
+        p_byte_size: upload.byteSize, p_uploaded: !!upload.bytes,
+      });
+      uploaded.push(upload);
+    } catch (error) {
+      rethrow(error);
+      errors.push(error.message);
+    }
+  }
+  for (const id of work.deletions ?? []) {
+    try {
+      await account.rpc("delete_note", { p_id: id });
+      notesDeleted.push(id);
+    } catch (error) {
+      rethrow(error);
+      if (error.code === "FORBIDDEN") notesDeleted.push(id); else errors.push(error.message);
+    }
+  }
+  const pushed = { sent, withdrawn, notesSent, notesDeleted, uploaded, errors };
   try {
     const pull = await account.rpc("pull_changes", { p_workspace: ws, p_since: binding.cursor });
-    return { sent, withdrawn, pull, errors };
+    return { ...pushed, pull };
   } catch (error) {
-    if (error.code === "FORBIDDEN") return { sent, withdrawn, removed: true, errors };
+    if (error.code === "FORBIDDEN") return { ...pushed, removed: true };
     throw error;
   }
 }
@@ -168,6 +258,9 @@ async function exchange(account, state, work) {
 function apply(store, state, result) {
   for (const s of result.sent) state.markSent(s.id, s.hash, s.version);
   for (const id of result.withdrawn) state.forgetSent(id);
+  for (const n of result.notesSent ?? []) state.markNoteSent(n.id, n.hash, n.version);
+  for (const id of result.notesDeleted ?? []) state.forgetNoteSent(id);
+  for (const u of result.uploaded ?? []) state.markAttachmentSent(u.id, u.noteId, u.contentHash, !!u.bytes);
   if (result.removed) {
     state.markRemoved();
     return { removed: true, applied: 0 };

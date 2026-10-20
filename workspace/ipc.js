@@ -116,6 +116,8 @@ const CHANNELS = [
   "team.ledger",
   "team.mapping",
   "team.setMapping",
+  "team.noteVisibility",
+  "team.setNoteVisibility",
 ];
 const PUBLIC_ERRORS = {
   ATTACHMENT_TOO_LARGE: "This file is larger than 100 MB. Choose a smaller file.",
@@ -242,7 +244,7 @@ function registerWorkspaceIPC({
         sequence: ++catalog.sequence,
       });
     }
-    if (typeof type === "string" && type.startsWith("action")) team?.localChanged();
+    if (typeof type === "string" && (type.startsWith("action") || type === "notes.changed")) team?.localChanged();
   };
   const teamService = () => {
     check(team, "TEAM_UNAVAILABLE", "Team workspaces are not configured");
@@ -1053,6 +1055,16 @@ function registerWorkspaceIPC({
         ownerPersonId: person(input.ownerPersonId),
         counterpartyPersonId: person(input.counterpartyPersonId),
       });
+    },
+    "team.noteVisibility": (input) => {
+      v.object(input, ["workspaceId", "noteId"]);
+      catalog.scoped(input.workspaceId);
+      return teamService().noteVisibility(v.uuid(input.noteId));
+    },
+    "team.setNoteVisibility": (input) => {
+      v.object(input, ["workspaceId", "noteId", "spaceId"]);
+      catalog.scoped(input.workspaceId);
+      return teamService().setNoteVisibility(v.uuid(input.noteId), v.uuid(input.spaceId, "space id"));
     },
     "team.ledger": (input) => {
       v.object(input, ["workspaceId"]);

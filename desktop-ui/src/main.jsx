@@ -908,6 +908,7 @@ function App() {
             <Notebook
               key={`${workspace.id}:${page}`}
               workspace={workspace}
+              shared={shared}
               today={page === "Today"}
               refreshKey={state.sequence}
               flushRef={flushRef}

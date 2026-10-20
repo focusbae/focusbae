@@ -86,8 +86,28 @@ suggested only when the conversation makes it unambiguous: exactly one other ide
 person, or the person themself when someone else made the promise. Explicit choices
 win, including choosing nobody.
 
+## Notes and attachments (2026-10-21)
+
+A note written in a team workspace syncs to the person's **My notes** (private) until
+they choose a team in the note header ("Visible to"). Nothing is sent before the first
+pull has said which space is My notes, so a note is never sent to a guessed place. The
+choice lives in `team.sqlite` `note_spaces`; only teams the person can edit are offered.
+
+Until co-editing, only the author changes a note's content; teammates read and comment
+on the web, and the author or an admin can share it with another team or a guest. Notes
+use the same version guard as commitments. The web renders the stored TipTap JSON with
+TipTap's static renderer from an allow-list of the node and mark types this app writes,
+never as HTML, and keeps only http(s) and mailto links.
+
+Attachments upload after their note exists (storage checks the note), once per content
+hash, to a private bucket at `workspace/note/attachment`; whoever can see the note can
+read them. HEIC photos send their PNG preview, since browsers cannot show HEIC. Files
+over the service's 50 MB limit are listed but stay on this Mac, and the web says so. One
+round holds at most 120 MB of uploads in memory; the rest go in later rounds.
+
 ## Open
 
 - Sync only runs for the open workspace; background sync of other team workspaces.
 - Team spaces other than "everyone" from the Mac (choose the team when accepting).
-- Notes in team spaces (snapshot sync, then Yjs co-editing; TEAM_PLAN weeks 4 and 7–8).
+- Teammates' notes on the Mac (they are pulled into `remote_notes`; shown on the web today).
+- Co-editing with Yjs (TEAM_PLAN weeks 7–8), which replaces author-only snapshots.

@@ -26,6 +26,12 @@ CREATE TABLE IF NOT EXISTS people (id TEXT PRIMARY KEY, name TEXT NOT NULL, emai
 CREATE TABLE IF NOT EXISTS commitments (id TEXT PRIMARY KEY, version INTEGER NOT NULL, data_json TEXT NOT NULL CHECK(json_valid(data_json))) STRICT;
 -- What this Mac last sent for each of its own actions, so unchanged ones are not resent.
 CREATE TABLE IF NOT EXISTS shared (action_id TEXT PRIMARY KEY, sent_hash TEXT NOT NULL, server_version INTEGER) STRICT;
+-- Notes: which team each note on this Mac belongs to (absent = My notes), what was
+-- last sent, which attachment versions are uploaded, and teammates' notes as last seen.
+CREATE TABLE IF NOT EXISTS note_spaces (note_id TEXT PRIMARY KEY, space_id TEXT NOT NULL, updated_at TEXT NOT NULL) STRICT;
+CREATE TABLE IF NOT EXISTS notes_sent (note_id TEXT PRIMARY KEY, sent_hash TEXT NOT NULL, server_version INTEGER) STRICT;
+CREATE TABLE IF NOT EXISTS attachments_sent (attachment_id TEXT PRIMARY KEY, note_id TEXT NOT NULL, content_hash TEXT NOT NULL, uploaded INTEGER NOT NULL) STRICT;
+CREATE TABLE IF NOT EXISTS remote_notes (id TEXT PRIMARY KEY, version INTEGER NOT NULL, data_json TEXT NOT NULL CHECK(json_valid(data_json))) STRICT;
 -- Who the team sees as owing an action and who it is owed to, chosen on this Mac.
 -- Absent = the default (the action's own owner; the one other named person, if any).
 CREATE TABLE IF NOT EXISTS mappings (
@@ -88,12 +94,18 @@ class TeamState {
       const visible = new Set(pull.visibleCommitmentIds);
       const drop = this.db.prepare("DELETE FROM commitments WHERE id = ?");
       for (const { id } of this.db.prepare("SELECT id FROM commitments").all()) if (!visible.has(id)) drop.run(id);
+      const note = this.db.prepare(`INSERT INTO remote_notes VALUES (?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET version = excluded.version, data_json = excluded.data_json`);
+      for (const n of pull.notes ?? []) note.run(n.id, n.version, JSON.stringify(n));
+      const visibleNotes = new Set(pull.visibleNoteIds ?? []);
+      const dropNote = this.db.prepare("DELETE FROM remote_notes WHERE id = ?");
+      for (const { id } of this.db.prepare("SELECT id FROM remote_notes").all()) if (!visibleNotes.has(id)) dropNote.run(id);
     })();
   }
   // Removed from the workspace: keep the binding as a marker, forget everything synced.
   markRemoved() {
     this.db.transaction(() => {
-      for (const table of ["spaces", "people", "commitments", "shared", "mappings"]) this.db.prepare(`DELETE FROM ${table}`).run();
+      for (const table of ["spaces", "people", "commitments", "shared", "mappings", "note_spaces", "notes_sent", "attachments_sent", "remote_notes"]) this.db.prepare(`DELETE FROM ${table}`).run();
       this.db.prepare("UPDATE binding SET status = 'removed', cursor = 0").run();
     })();
   }
@@ -126,6 +138,43 @@ class TeamState {
     this.db.prepare(`INSERT INTO mappings VALUES (?, ?, ?, ?) ON CONFLICT(action_id) DO UPDATE SET
       owner_person_id = excluded.owner_person_id, counterparty_person_id = excluded.counterparty_person_id, updated_at = excluded.updated_at`)
       .run(actionId, mapping.ownerPersonId, mapping.counterpartyPersonId, new Date().toISOString());
+  }
+  // My notes: the private space this account has in the workspace.
+  privateSpaceId() {
+    return this.db.prepare("SELECT id FROM spaces WHERE kind = 'private'").get()?.id ?? null;
+  }
+  noteSpace(noteId) {
+    return this.db.prepare("SELECT space_id AS spaceId FROM note_spaces WHERE note_id = ?").get(noteId)?.spaceId ?? null;
+  }
+  setNoteSpace(noteId, spaceId) {
+    if (spaceId === null) return this.db.prepare("DELETE FROM note_spaces WHERE note_id = ?").run(noteId);
+    const space = this.db.prepare("SELECT kind, role FROM spaces WHERE id = ?").get(spaceId);
+    if (!space || space.role !== "editor") throw Object.assign(new Error("You can't add notes to that team"), { code: "INVALID_INPUT" });
+    if (space.kind === "private") return this.db.prepare("DELETE FROM note_spaces WHERE note_id = ?").run(noteId);
+    this.db.prepare(`INSERT INTO note_spaces VALUES (?, ?, ?) ON CONFLICT(note_id) DO UPDATE SET
+      space_id = excluded.space_id, updated_at = excluded.updated_at`).run(noteId, spaceId, new Date().toISOString());
+  }
+  noteSent(noteId) {
+    return this.db.prepare("SELECT sent_hash AS hash, server_version AS version FROM notes_sent WHERE note_id = ?").get(noteId) ?? null;
+  }
+  markNoteSent(noteId, hash, version) {
+    this.db.prepare(`INSERT INTO notes_sent VALUES (?, ?, ?) ON CONFLICT(note_id) DO UPDATE SET
+      sent_hash = excluded.sent_hash, server_version = excluded.server_version`).run(noteId, hash, version ?? null);
+  }
+  forgetNoteSent(noteId) {
+    this.db.prepare("DELETE FROM notes_sent WHERE note_id = ?").run(noteId);
+    this.db.prepare("DELETE FROM attachments_sent WHERE note_id = ?").run(noteId);
+  }
+  sentNoteIds() { return this.db.prepare("SELECT note_id FROM notes_sent").all().map((row) => row.note_id); }
+  attachmentSent(attachmentId) {
+    return this.db.prepare("SELECT content_hash AS contentHash, uploaded FROM attachments_sent WHERE attachment_id = ?").get(attachmentId) ?? null;
+  }
+  markAttachmentSent(attachmentId, noteId, contentHash, uploaded) {
+    this.db.prepare(`INSERT INTO attachments_sent VALUES (?, ?, ?, ?) ON CONFLICT(attachment_id) DO UPDATE SET
+      content_hash = excluded.content_hash, uploaded = excluded.uploaded`).run(attachmentId, noteId, contentHash, uploaded ? 1 : 0);
+  }
+  remoteNotes() {
+    return this.db.prepare("SELECT data_json FROM remote_notes").all().map((row) => JSON.parse(row.data_json));
   }
   sharedIds() { return this.db.prepare("SELECT action_id FROM shared").all().map((row) => row.action_id); }
   close() { if (this.db.open) this.db.close(); }

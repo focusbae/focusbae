@@ -160,6 +160,26 @@ class TeamAccount extends EventEmitter {
     return body;
   }
 
+  // Stores a file in the team's private storage, replacing any earlier version.
+  async upload(bucket, objectPath, bytes, contentType) {
+    const ticket = this.policy.ticket();
+    this.policy.assert("team", ticket);
+    const token = await this.#accessToken(ticket);
+    this.policy.assert("team", ticket);
+    const response = await this.fetch(new URL(`/storage/v1/object/${bucket}/${objectPath}`, this.session.supabaseUrl), {
+      method: "POST",
+      headers: {
+        apikey: this.session.supabaseAnonKey,
+        authorization: `Bearer ${token}`,
+        "content-type": contentType,
+        "x-upsert": "true",
+      },
+      body: bytes,
+    });
+    if (response.status === 403) throw fail("FORBIDDEN", "Upload not allowed");
+    if (!response.ok) throw fail("REMOTE", `Upload failed (${response.status})`);
+  }
+
   async select(path) {
     const ticket = this.policy.ticket();
     this.policy.assert("team", ticket);

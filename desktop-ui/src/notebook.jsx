@@ -39,6 +39,7 @@ import {
   Wand,
   Paperclip,
 } from "lucide-react";
+import { NoteVisibility } from "./note-visibility";
 import { SaveQueue } from "./save-queue.mjs";
 import { Wikilink, completeLink } from "./wikilink.mjs";
 import { NoteAttachment, uploadAttachment } from "./note-attachment.mjs";
@@ -387,6 +388,7 @@ function LinkPanel({ note, version, openNote, openLink, openPerson }) {
 
 function NoteEditor({
   note,
+  teamWorkspaceId,
   folders,
   moveNote,
   pagesHidden,
@@ -766,6 +768,7 @@ function NoteEditor({
             </select>
             </>
           )}
+          {!note.deletedAt && teamWorkspaceId && <NoteVisibility workspaceId={teamWorkspaceId} noteId={note.id} />}
         </div>
         <div className="note-actions">
           {!note.deletedAt && (
@@ -996,6 +999,7 @@ const GRAPH_KEY = "graph:graph";
 
 export function Notebook({
   workspace,
+  shared = null,
   today,
   refreshKey,
   flushRef,
@@ -1774,6 +1778,7 @@ export function Notebook({
           <NoteEditor
             key={`${payload.note.id}:${editorVersion}`}
             note={payload.note}
+            teamWorkspaceId={shared ? workspace.id : null}
             folders={folders.items}
             moveNote={moveNote}
             pagesHidden={pagesHidden}

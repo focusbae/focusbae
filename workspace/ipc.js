@@ -190,7 +190,7 @@ const PUBLIC_ERRORS = {
   ALREADY_EXISTS: "That team workspace is already on this Mac.",
   FORBIDDEN: "You don't have access to that team workspace.",
   READ_ONLY: "This page belongs to a teammate. Only they can change it.",
-  CLOUD_UNAVAILABLE: "Cloud transcription isn't available for this workspace right now. Choose This Mac only, or check your team connection.",
+  CLOUD_UNAVAILABLE: "Cloud processing isn't available for this workspace right now. Choose This Mac only, or check your team connection.",
   TRANSCRIPTION_FAILED: "Cloud transcription didn't finish. Saved audio is kept; retry, or transcribe on this Mac.",
   // Says exactly what stops the move; the message is written for the person.
   MOVE_BLOCKED: null,
@@ -404,10 +404,12 @@ function registerWorkspaceIPC({
     "capture.state": () => recording.snapshot(),
     "capture.playbackInfo": (input) => playback.info(input),
     "capture.playbackRead": (input) => playback.read(input),
-    // Whether recordings here may be transcribed with Deepgram (processing level 3).
+    // Which cloud processing recordings here may use (TEAM_PLAN §3).
     "capture.cloud": (input) => {
       v.object(input, ["workspaceId"]);
-      return { available: !!recording.cloudSpeech?.(catalog.scoped(input.workspaceId)) };
+      const store = catalog.scoped(input.workspaceId);
+      // speech: Deepgram transcription (level 3); ai: OpenAI finds commitments (level 2+).
+      return { speech: !!recording.cloudSpeech?.(store), ai: !!recording.cloudAI?.(store) };
     },
     "capture.storage": (input) => {
       v.object(input, ["workspaceId"]);

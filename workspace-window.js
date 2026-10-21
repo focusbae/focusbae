@@ -142,6 +142,7 @@ function initialize({ privacy, busy, desktopSettings, onRecordingChange = () => 
     // Cloud transcription (level 3) for team workspaces that allow it; `team` is set
     // up below and is only read when a recording starts or is transcribed.
     cloudSpeech: (store) => team?.cloudSpeech(store) ?? null,
+    cloudAI: (store) => team?.cloudAI(store) ?? null,
   });
   const { ModelManager } = require("./recording/model-manager");
   models = new ModelManager({

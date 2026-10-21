@@ -200,6 +200,25 @@ class TeamAccount extends EventEmitter {
     return { accessToken: body.accessToken, expiresAt: body.expiresAt };
   }
 
+  // Commitments in part of one transcript, found by OpenAI through the team service
+  // (level 2). The service relays without storing; this returns the model's answer.
+  async extract(workspace, { owner, segments }) {
+    const ticket = this.policy.ticket();
+    this.policy.assert("team", ticket);
+    const token = await this.#accessToken(ticket);
+    this.policy.assert("team", ticket);
+    const response = await this.fetch(new URL("/api/desktop/extract", this.teamUrl), {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify({ workspace, owner, segments }),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (response.status === 403) throw fail("FORBIDDEN", "Cloud AI isn't allowed for this workspace");
+    if (response.status === 429) throw fail("RATE_LIMITED", "Too many cloud AI requests in the last hour");
+    if (!response.ok || !Array.isArray(body.commitments)) throw fail("REMOTE", `Cloud AI is unavailable (${body.error ?? response.status})`);
+    return body.commitments;
+  }
+
   // Reads a file from the team's private storage; null when it is not there (yet).
   async download(bucket, objectPath) {
     const ticket = this.policy.ticket();

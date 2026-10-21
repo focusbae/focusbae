@@ -876,7 +876,7 @@ test("a recording chosen for cloud transcription uses Deepgram while allowed, an
       return { ok: true, status: 200, json: async () => ({ results: { channels: [{ alternatives: [{ transcript: "Words from Deepgram" }] }] } }) };
     },
   };
-  const f = await fixture(t, { cloudSpeech: () => (allowed ? cloud : null) });
+  const f = await fixture(t, { cloudSpeech: () => (allowed ? cloud : null), cloudAI: () => null });
   assert.throws(() => f.service.start(f.input({ processing: "cloud" })), { code: "CLOUD_UNAVAILABLE" });
 
   allowed = true; // no on-device model is needed for the cloud
@@ -901,7 +901,45 @@ test("a recording chosen for cloud transcription uses Deepgram while allowed, an
   await f.service.stop(later.id);
   await until(() => !f.service.busy());
   const fallback = f.service.detail(later.workspaceId, later.id);
-  assert.match(fallback.recording.processingNote, /this Mac transcribed it/);
+  assert.match(fallback.recording.processingNote, /wasn't available, so this Mac/);
   assert.ok(f.calls() > 0, "transcribed on this Mac instead");
   assert.equal(sent.length, sentBefore, "and nothing more went to Deepgram");
+});
+
+test("cloud AI (level 2) finds commitments in the transcript text, and this Mac takes over if it fails", async (t) => {
+  const asked = [];
+  let fail = false;
+  const cloudAI = {
+    origin: "cloud-model",
+    extract: async ({ owner, segments }) => {
+      asked.push({ owner, count: segments.length });
+      if (fail) throw Object.assign(new Error("Cloud AI is unavailable"), { code: "REMOTE" });
+      return [{ segmentId: segments[0].id, quote: "I will send the deck on Friday", owner: "unknown", person: "" }];
+    },
+  };
+  const f = await fixture(t, { cloudAI: () => cloudAI, createEngine: () => ({
+    load: async () => {}, dispose: async () => {},
+    transcribe: async () => ({ content: "I will send the deck on Friday." }),
+  }) });
+  f.modelReady();
+  const run = async () => {
+    const record = f.service.start(f.input({ processing: "cloud-ai", purpose: "conversation" }));
+    await turn();
+    f.sources.microphone.emit("audio", tone(5));
+    await f.service.stop(record.id);
+    await until(() => !f.service.busy());
+    return f.service.detail(record.workspaceId, record.id);
+  };
+  const detail = await run();
+  assert.equal(detail.recording.processing, "cloud-ai");
+  assert.ok(asked.length >= 1, "the transcript text went to the cloud extractor");
+  const store = f.catalog.store;
+  const origins = store._db.prepare("SELECT json_extract(data_json, '$.origin') AS origin FROM actions").all().map((r) => r.origin);
+  assert.ok(origins.includes("cloud-model"), `suggestions are marked as cloud: ${origins}`);
+  assert.equal(detail.recording.processingNote, null);
+
+  fail = true;
+  const fallback = await run();
+  assert.match(fallback.recording.processingNote, /Cloud AI didn't finish, so this Mac found the commitments/);
+  assert.equal(fallback.recording.aiState, "complete");
 });

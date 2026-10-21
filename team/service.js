@@ -238,13 +238,26 @@ class TeamService extends EventEmitter {
   // (connected, not Strict Local). Checked when a recording starts and again when it
   // is transcribed, so a change in between is respected.
   cloudSpeech(store) {
+    const binding = this.#cloudBinding(store, 3);
+    return binding && { policy: this.policy, token: () => this.account.speechToken(binding.serverWorkspaceId) };
+  }
+
+  // Cloud AI on transcript text (level 2), under the same conditions as cloudSpeech but
+  // from level 2: returns an extractor that finds commitments with OpenAI, or null.
+  cloudAI(store) {
+    const binding = this.#cloudBinding(store, 2);
+    if (!binding) return null;
+    const { CloudExtractor } = require("./cloud-extraction");
+    return new CloudExtractor({ account: this.account, workspace: binding.serverWorkspaceId, policy: this.policy });
+  }
+
+  #cloudBinding(store, level) {
     if (!store || !TeamState.exists(store._directory) || !this.policy.allows("team")) return null;
     const state = new TeamState(store._directory);
     try {
       const binding = state.binding();
       if (binding.status === "removed" || binding.accountUserId !== this.account.status().userId) return null;
-      if ((binding.processingLevelMax ?? 1) < 3) return null;
-      return { policy: this.policy, token: () => this.account.speechToken(binding.serverWorkspaceId) };
+      return (binding.processingLevelMax ?? 1) >= level ? binding : null;
     } finally {
       state.close();
     }

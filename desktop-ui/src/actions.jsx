@@ -488,6 +488,8 @@ export function Actions({ workspace, refreshKey, openRecording, openNote, initia
                     ? "AI suggestion"
                     : action.origin === "local-model"
                       ? "On-device AI suggestion"
+                      : action.origin === "cloud-model"
+                        ? "Cloud AI suggestion"
                       : action.origin === "local-rule"
                         ? "Local suggestion"
                         : "Created by you"}

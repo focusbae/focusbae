@@ -1,4 +1,4 @@
-# TEAM-02: Cloud transcription in team workspaces (processing level 3)
+# TEAM-02: Cloud processing in team workspaces (levels 2 and 3)
 
 Status: accepted, 2026-10-21.
 
@@ -44,3 +44,21 @@ on-device speech on every accent group and on meetings).
   `tests/recording/recording.test.js`, and the team service rule in
   `tests/team/notes-sync.test.js`; the zero-network test still passes with team
   features on, because nothing is sent unless all of the above hold.
+
+## Level 2: commitments found by OpenAI (added 2026-10-21)
+
+- Levels are cumulative: 3 includes 2. The Record dialog offers what the workspace
+  allows: Deepgram + OpenAI, OpenAI on the transcript text only, or This Mac only.
+- OpenAI has no short-lived client tokens for this, so the team service relays: the Mac
+  sends a part of one transcript (`team/cloud-extraction.js`, at most 40,000 characters
+  a request); the service checks membership, the level and an hourly limit, records
+  that it happened, calls OpenAI with `store: false`, and returns the answer. No
+  transcript text is kept or logged by FocusBae.
+- The instructions and answer shape are the on-device model's
+  (`local-ai/apple-extract`, `qualification/extraction/cloud.js`), so the same
+  extraction code handles both; suggestions are marked "Cloud AI suggestion"
+  (origin `cloud-model`).
+- If cloud AI is no longer allowed, or fails, the on-device model (or the rules) finds
+  the commitments instead and the recording says so.
+- Model: `OPENAI_EXTRACT_MODEL` on the service, default `gpt-6.1-sol` (best precision on
+  the AMI real-meeting set; see the benchmark).

@@ -305,8 +305,10 @@ function locate(text, quote) {
 
 async function extractRecordingActionsLocal(store, recordingId, runtime) {
   const workspaceId = store.identity.id;
+  // The on-device model, or a cloud one (level 2) that says so; suggestions carry it.
+  const origin = runtime.origin ?? "local-model";
   const recording = store.get({ workspaceId }, "recording", recordingId);
-  if (recording.purpose === "learning") return { proposed: 0, attributed: 0, restated: 0, skipped: "learning", method: "local-model" };
+  if (recording.purpose === "learning") return { proposed: 0, attributed: 0, restated: 0, skipped: "learning", method: origin };
   const segments = listAll(store, { workspaceId }, "transcript", { recordingId });
   // The model sees "You" only for the speaker the user identified; otherwise the
   // account owner is unknown and resolveOwner never attributes work to them.
@@ -333,10 +335,10 @@ async function extractRecordingActionsLocal(store, recordingId, runtime) {
     if (!span || looksConversational(span.quote)) continue;
     if (considered >= MODEL_LIMIT) {
       attributed += attributeUnmatched(store, workspaceId, existing, segments, speakers);
-      return { proposed, attributed, restated, limited: true, limit: MODEL_LIMIT, method: "local-model" };
+      return { proposed, attributed, restated, limited: true, limit: MODEL_LIMIT, method: origin };
     }
     considered++;
-    const key = `local-model-v1:${segment.id}:${segment.contentHash}:${span.start}`;
+    const key = `${origin}-v1:${segment.id}:${segment.contentHash}:${span.start}`;
     const context = { workspaceId, clientRequestId: requestId(key) };
     const speaker = speakers.of(segment);
     const resolved = resolveOwner({ quote: span.quote, speaker, modelOwner: item.owner, modelPerson: item.person });
@@ -349,7 +351,7 @@ async function extractRecordingActionsLocal(store, recordingId, runtime) {
         ...actionOwner(resolved, speaker),
         priority: "medium",
       },
-      "local-model",
+      origin,
       existing,
       restating,
       spans,
@@ -361,7 +363,7 @@ async function extractRecordingActionsLocal(store, recordingId, runtime) {
     if (outcome === "attributed") attributed++;
   }
   attributed += attributeUnmatched(store, workspaceId, existing, segments, speakers);
-  return { proposed, attributed, restated, limited: false, method: "local-model" };
+  return { proposed, attributed, restated, limited: false, method: origin };
 }
 
 // Prefers the on-device model and falls back to the rule baseline when the model

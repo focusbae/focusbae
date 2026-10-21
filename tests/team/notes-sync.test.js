@@ -550,6 +550,10 @@ test("cloud transcription is offered only where the admin allows level 3, to the
     spaces: [], people: [], commitments: [], visibleCommitmentIds: [], notes: [], visibleNoteIds: [] });
   pull(1);
   assert.equal(service.cloudSpeech(store), null, "level 1: this Mac only");
+  assert.equal(service.cloudAI(store), null);
+  pull(2);
+  assert.equal(service.cloudSpeech(store), null, "level 2: cloud AI on text only");
+  assert.equal(service.cloudAI(store).origin, "cloud-model");
   pull(3);
   const cloud = service.cloudSpeech(store);
   await cloud.token();
@@ -560,4 +564,12 @@ test("cloud transcription is offered only where the admin allows level 3, to the
   policy.setTeamConnected(true);
   account.status = () => ({ connected: true, userId: "someone-else" });
   assert.equal(service.cloudSpeech(store), null, "another account");
+});
+
+test("cloud AI sends each transcript in parts the team service accepts", () => {
+  const { batches } = require("../../team/cloud-extraction");
+  const segments = Array.from({ length: 700 }, (_, i) => ({ id: `s${i}`, speaker: null, text: "x".repeat(100) }));
+  const parts = batches(segments);
+  assert.ok(parts.every((p) => p.length <= 300 && p.reduce((n, s) => n + s.text.length, 0) <= 40000));
+  assert.equal(parts.flat().length, 700);
 });

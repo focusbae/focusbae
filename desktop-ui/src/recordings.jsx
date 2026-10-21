@@ -136,17 +136,17 @@ export function RecordDialog({
   const [consent, setConsent] = useState(false);
   const [keepAudio, setKeepAudio] = useState(false);
   const [notes, setNotes] = useState([]);
-  // Cloud transcription (processing level 3) when this team workspace allows it. The
-  // admin's highest level is the default; the person can keep this one on the Mac.
-  const [cloud, setCloud] = useState(false);
+  // Cloud processing this team workspace allows (TEAM_PLAN §3): the admin's highest
+  // level is the default, and the person can keep this recording on the Mac.
+  const [cloud, setCloud] = useState({ speech: false, ai: false });
   const [processing, setProcessing] = useState("local");
   useEffect(() => {
     let current = true;
     unwrap(api.capture.cloud({ workspaceId: workspace.id }))
       .then((value) => {
         if (!current) return;
-        setCloud(value.available);
-        setProcessing(value.available ? "cloud" : "local");
+        setCloud(value);
+        setProcessing(value.speech ? "cloud" : value.ai ? "cloud-ai" : "local");
       })
       .catch(() => {});
     return () => {
@@ -335,22 +335,26 @@ export function RecordDialog({
           <option value="hindi">Hindi</option>
           <option value="mixed">English + Hindi (experimental)</option>
         </select>
-        {cloud && (
+        {(cloud.speech || cloud.ai) && (
           <>
-            <label htmlFor="capture-processing">Transcribe with</label>
+            <label htmlFor="capture-processing">Processing</label>
             <select
               id="capture-processing"
               value={processing}
               disabled={busy}
               onChange={(event) => setProcessing(event.target.value)}
             >
-              <option value="cloud">Deepgram (cloud): more accurate with accents and meetings</option>
+              {cloud.speech && <option value="cloud">Cloud: Deepgram transcribes, OpenAI finds commitments</option>}
+              {cloud.ai && <option value="cloud-ai">Cloud AI: OpenAI finds commitments in the transcript</option>}
               <option value="local">This Mac only</option>
             </select>
-            {processing === "cloud" && (
+            {processing !== "local" && (
               <p className="capture-permission">
-                Audio goes from this Mac to Deepgram for transcription, not through FocusBae, and
-                Deepgram doesn't train on it. Your workspace allows this.
+                {processing === "cloud"
+                  ? "Audio goes from this Mac to Deepgram, not through FocusBae, and Deepgram doesn't train on it. "
+                  : "Audio stays on this Mac. "}
+                The transcript text goes to OpenAI through FocusBae to find commitments; neither keeps it.
+                Your workspace allows this.
               </p>
             )}
           </>
@@ -888,8 +892,8 @@ export function Recordings({
               <span>{record.state}</span>
               <span>{time(record.durationMs)}</span>
               {/* Every recording says where it was transcribed (TEAM_PLAN §3). */}
-              <span className="processing-badge" title={record.processing === "cloud" ? "Audio was sent to Deepgram for transcription" : "Transcribed on this Mac"}>
-                {record.processing === "cloud" && !record.processingNote ? "Deepgram (cloud)" : "On this Mac"}
+              <span className="processing-badge" title={{ cloud: "Transcribed by Deepgram; commitments found by OpenAI", "cloud-ai": "Transcribed on this Mac; commitments found by OpenAI" }[record.processing] ?? "Processed on this Mac"}>
+                {{ cloud: "Deepgram + OpenAI", "cloud-ai": "OpenAI commitments" }[record.processing] ?? "On this Mac"}
               </span>
               {record.microphones?.length > 0 && <span title="Microphone used">{record.microphones.join(", then ")}</span>}
               {record.originalName && <span className="recording-original" title={record.originalName}>Original: {record.originalName}</span>}

@@ -118,6 +118,8 @@ class RecordingService extends EventEmitter {
     // (store) => null, or { token, policy } when this workspace may transcribe in the
     // cloud right now (team service: level 3 allowed, account connected).
     cloudSpeech = null,
+    // (store) => null, or a commitment extractor using OpenAI (level 2 or higher).
+    cloudAI = null,
     legacyBusy = () => false,
     clock = () => performance.now(),
     startTimeout = 15000,
@@ -152,6 +154,7 @@ class RecordingService extends EventEmitter {
       diarizer,
       speech,
       cloudSpeech,
+      cloudAI,
     });
     // Readiness is per recording language; see recording/speech.js for routing.
     this.model =
@@ -221,10 +224,12 @@ class RecordingService extends EventEmitter {
     v.choice(input.sourceMode, ["microphone", "system", "both"], "source");
     v.choice(input.language, ["english", "hindi", "mixed"], "language");
     const keepAudio = v.boolean(input.keepAudio ?? false, "keepAudio");
-    // "cloud": transcribe with Deepgram (processing level 3); only where it is allowed.
-    const processing = v.choice(input.processing ?? "local", ["local", "cloud"], "processing");
-    check(processing === "local" || this.cloudSpeech?.(store), "CLOUD_UNAVAILABLE",
-      "Cloud transcription isn't available for this workspace right now");
+    // Processing levels (TEAM_PLAN §3), only where the workspace allows them:
+    // "cloud-ai" (2) has OpenAI find commitments in the transcript text; "cloud" (3) also
+    // transcribes with Deepgram.
+    const processing = v.choice(input.processing ?? "local", ["local", "cloud-ai", "cloud"], "processing");
+    check(processing === "local" || (processing === "cloud" ? this.cloudSpeech?.(store) : this.cloudAI?.(store)),
+      "CLOUD_UNAVAILABLE", "Cloud processing isn't available for this workspace right now");
     check(
       input.consent === true,
       "CONSENT_REQUIRED",
@@ -876,12 +881,22 @@ class RecordingService extends EventEmitter {
         diarization = { status: "failed", reason: error.code ?? "FAILED" };
       }
       let extraction = { proposed: 0 };
+      // Cloud AI (level 2+) when this recording chose it and it is still allowed;
+      // otherwise the on-device model, and the recording says so.
+      const wantsCloudAI = ["cloud-ai", "cloud"].includes(this.current(task).metadata?.processing);
+      const cloudExtractor = wantsCloudAI ? this.cloudAI?.(store) : null;
+      if (wantsCloudAI && !cloudExtractor)
+        this.update(task, { metadata: { processingNote: "Cloud AI wasn't available, so this Mac found the commitments." } });
+      const { extractActions } = require("../workspace/action-extraction");
       try {
-        extraction = await require("../workspace/action-extraction").extractActions(
-          store,
-          id,
-          this.extractor,
-        );
+        try {
+          extraction = await extractActions(store, id, cloudExtractor ?? this.extractor);
+        } catch (error) {
+          // A cloud failure (network, limit, sign-out mid-way) falls back to this Mac.
+          if (!cloudExtractor) throw error;
+          this.update(task, { metadata: { processingNote: "Cloud AI didn't finish, so this Mac found the commitments." } });
+          extraction = await extractActions(store, id, this.extractor);
+        }
       } catch (error) {
         extraction = { proposed: 0, failed: true, reason: error.code ?? "FAILED" };
       }

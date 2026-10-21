@@ -25,6 +25,18 @@ node qualification/extraction/score.js --extractor claude
 node qualification/extraction/score.js --extractor claude-me
 ```
 
+## Real meetings: AMI action items
+
+`python3 qualification/extraction/ami_gold.py` turns AMI's human-written action items
+(each linked to the dialogue acts it came from) into `gold/ami/` (git-ignored, CC BY 4.0
+AMI Consortium): app-sized windows with the Project Manager as account owner. Owners are
+not labelled there, so only finding is scored, and recall is the number to read:
+summaries do not list every promise.
+
+```bash
+node qualification/extraction/score.js --extractor openai --gold qualification/extraction/gold/ami --quiet
+```
+
 ## Metrics
 
 | Metric | Meaning |

@@ -4,7 +4,7 @@
 // about the model, not the prompt. Anthropic is the primary provider and OpenAI the
 // backup (owner, 2026-10-21). Keys and model names come from the environment:
 //   ANTHROPIC_API_KEY, ANTHROPIC_MODEL (default claude-sonnet-5-5)
-//   OPENAI_API_KEY, OPENAI_MODEL (required; list with: node cloud.js --models openai)
+//   OPENAI_API_KEY, OPENAI_MODEL (default gpt-6.1-sol; list with: node cloud.js --models openai)
 // Only the benchmark's own transcripts are sent. The app does not use this file.
 
 // Keys live in qualification/.env (git-ignored; this repository is public).
@@ -88,7 +88,7 @@ const PROVIDERS = {
     },
   },
   openai: {
-    model: () => key("OPENAI_MODEL"),
+    model: () => process.env.OPENAI_MODEL || "gpt-6.1-sol",
     async extract(meeting) {
       const json = await post("https://api.openai.com/v1/chat/completions",
         { authorization: `Bearer ${key("OPENAI_API_KEY")}` },

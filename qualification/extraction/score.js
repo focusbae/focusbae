@@ -137,7 +137,9 @@ function load(dir) {
 }
 
 async function score(meetings, extract) {
-  const totals = { predicted: 0, expected: 0, truePositive: 0, ownerCorrect: 0, meetings: [] };
+  // Sets whose labels say what was promised but not who (AMI action items) mark
+  // "ownersLabelled": false; their matches count for finding, not for ownership.
+  const totals = { predicted: 0, expected: 0, truePositive: 0, ownerCorrect: 0, ownerScored: 0, ownerExpected: 0, meetings: [] };
   for (const meeting of meetings) {
     const predictions = await extract(meeting);
     const used = new Set();
@@ -152,13 +154,17 @@ async function score(meetings, extract) {
       }
       used.add(index);
       tp++;
-      if (predictions[index].owner === expected.owner) ownerCorrect++;
+      if (meeting.ownersLabelled !== false && predictions[index].owner === expected.owner) ownerCorrect++;
     }
     const falsePositives = predictions.filter((_, i) => !used.has(i)).map((p) => p.quote);
     totals.predicted += predictions.length;
     totals.expected += meeting.commitments.length;
     totals.truePositive += tp;
     totals.ownerCorrect += ownerCorrect;
+    if (meeting.ownersLabelled !== false) {
+      totals.ownerScored += tp;
+      totals.ownerExpected += meeting.commitments.length;
+    }
     totals.meetings.push({ id: meeting.id, source: meeting.source, predicted: predictions.length,
       expected: meeting.commitments.length, truePositive: tp, ownerCorrect, misses, falsePositives });
   }
@@ -167,9 +173,9 @@ async function score(meetings, extract) {
     ...totals,
     precision: ratio(totals.truePositive, totals.predicted),
     recall: ratio(totals.truePositive, totals.expected),
-    ownerAccuracy: ratio(totals.ownerCorrect, totals.truePositive),
+    ownerAccuracy: ratio(totals.ownerCorrect, totals.ownerScored),
     // Owner-correct commitments over all labelled ones: the number the ledger lives on.
-    endToEnd: ratio(totals.ownerCorrect, totals.expected),
+    endToEnd: ratio(totals.ownerCorrect, totals.ownerExpected),
   };
 }
 
@@ -193,9 +199,10 @@ async function main() {
   console.log(`extractor ${name} · ${meetings.length} transcripts (${sources})`);
   console.log(`precision ${pct(result.precision)} (${result.truePositive}/${result.predicted})`);
   console.log(`recall    ${pct(result.recall)} (${result.truePositive}/${result.expected})`);
-  console.log(`owner     ${pct(result.ownerAccuracy)} of matched (${result.ownerCorrect}/${result.truePositive})`);
+  console.log(`owner     ${pct(result.ownerAccuracy)} of matched (${result.ownerCorrect}/${result.ownerScored})`);
   console.log(`end-to-end ${pct(result.endToEnd)} of labelled commitments found with the right owner`);
   if (usage.model) console.log(`model ${usage.model} · ${usage.input} input + ${usage.output} output tokens`);
+  if (args.includes("--quiet")) return;
   for (const m of result.meetings) {
     for (const quote of m.misses) console.log(`  miss  [${m.id}] ${quote}`);
     for (const quote of m.falsePositives) console.log(`  false [${m.id}] ${quote}`);

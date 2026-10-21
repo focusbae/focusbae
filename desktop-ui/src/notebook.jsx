@@ -339,6 +339,9 @@ function LinkSuggestions({ items, highlight, coords, choose }) {
 // What this note points at, and what points back. Both come from the same derived
 // table the graph reads, so the panel and the graph never disagree.
 function LinkPanel({ note, version, openNote, openLink, openPerson }) {
+  // In a teammate's page, a title that names no page you can see may name one you
+  // cannot: it keeps their words but never offers to create a page of yours.
+  const restricted = !!note.team;
   const [links, setLinks] = useState(null);
   useEffect(() => {
     let current = true;
@@ -362,18 +365,20 @@ function LinkPanel({ note, version, openNote, openLink, openPerson }) {
             {links.outgoing.map((link) => (
               <li key={`${link.kind}:${link.label}`}>
                 <button
-                  className={`link-chip ${link.resolved ? "" : "unresolved"}`}
+                  className={`link-chip ${link.resolved ? "" : restricted ? "restricted" : "unresolved"}`}
+                  title={!link.resolved && restricted ? "Restricted page: you can't open it. It may be private, or not written yet." : undefined}
                   onClick={() =>
                     link.kind === "person"
                       ? openPerson(link.id)
                       : link.resolved
                         ? openNote(link.id)
-                        : openLink(link.label)
+                        : openLink(link.label, { restricted })
                   }
                 >
                   {link.kind === "person" && <UserRound size={12} />}
+                  {!link.resolved && restricted && <LockKeyhole size={11} />}
                   {link.label}
-                  {!link.resolved && <span className="hint">create</span>}
+                  {!link.resolved && !restricted && <span className="hint">create</span>}
                 </button>
               </li>
             ))}
@@ -451,7 +456,7 @@ function NoteEditor({
   const [rewriting, setRewriting] = useState(false);
   // The editor is created once, so these read the current props and state.
   const follow = useRef(null);
-  follow.current = (label) => openLink(label);
+  follow.current = (label) => openLink(label, { restricted: !!note.team });
   const keys = useRef(() => false);
   const queueRef = useRef(null);
   if (!queueRef.current)
@@ -1129,13 +1134,17 @@ export function Notebook({
     }).catch(() => {});
   // Following a [[link]]. An unresolved one creates the page it names, which is how
   // a linked notebook grows: you write the link first and fill the page later.
-  const openLink = (label) =>
+  const openLink = (label, { restricted = false } = {}) =>
     act(async () => {
       const target = await unwrap(
         api.links.resolve({ workspaceId: workspace.id, label }),
       );
       if (target.kind === "person" && target.id) {
         openPerson?.(target.id);
+        return;
+      }
+      if (!target.id && restricted) {
+        setNotice(`Restricted page: you can't open "${label}". It may be private, or not written yet.`);
         return;
       }
       const note = target.id

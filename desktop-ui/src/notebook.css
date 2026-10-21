@@ -694,6 +694,10 @@
   border-style: dashed;
   color: var(--muted);
 }
+.link-chip.restricted {
+  color: var(--muted);
+  cursor: not-allowed;
+}
 .link-chip .hint {
   color: var(--muted);
   font-size: 10.5px;

@@ -1008,6 +1008,7 @@ function App() {
       )}
       {recordDialog && (
         <RecordDialog
+          shared={!!shared}
           setupModel={() => {
             setModelDialog(true);
           }}

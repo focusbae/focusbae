@@ -413,3 +413,9 @@ ul.recording-warning {
   min-width: 0;
 }
 .recording-gaps { margin: 8px 0 0; font-size: 12px; }
+
+.record-destination {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}

@@ -777,7 +777,7 @@ function NoteEditor({
                     timeZone: "UTC",
                   }).format(new Date(`${note.dailyDate}T12:00:00Z`))
                 : teammate
-                  ? <span className="note-owner"><LockKeyhole size={13} strokeWidth={1.7} />{teammate.arriving ? "Your page · its files are still arriving" : teammate.authorName ? `${teammate.authorName}'s page` : "A teammate's page"}{teammate.spaceName ? ` · ${teammate.spaceName}` : ""}</span>
+                  ? <span className="note-owner"><LockKeyhole size={13} strokeWidth={1.7} />{teammate.arriving ? "Your page · its files are still arriving" : teammate.lostAccess ? "Your page · you can no longer edit it in this team" : teammate.authorName ? `${teammate.authorName}'s page` : "A teammate's page"}{teammate.spaceName ? ` · ${teammate.spaceName}` : ""}</span>
                   : "Notebook"}
           </span>
           {!locked && note.kind !== "daily" && moveNote && folders.length > 0 && (

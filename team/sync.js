@@ -247,7 +247,9 @@ async function exchange(account, state, work) {
       notesSent.push({ id: note.id, hash: note.hash, version: row.version });
     } catch (error) {
       rethrow(error);
-      if (error.code !== "VERSION_CONFLICT") errors.push(error.message);
+      // Refused because the person can no longer write in that team: the pull below
+      // shows it, and the apply step keeps their edits as a copy and says so.
+      if (error.code !== "VERSION_CONFLICT" && error.code !== "FORBIDDEN") errors.push(error.message);
     }
   }
   // Attachments only after their note exists on the server; storage checks the note.
@@ -341,20 +343,26 @@ function mirrorPages(store, state, result) {
   const me = state.binding().accountUserId;
   for (const remote of pagesFromTeam(state, result.pull)) {
     const local = store._raw("note", remote.id);
-    if (local && !local.team) continue; // never overwrite a page of this person's own
-    if (remote.authorId === me) {
+    const mine = remote.authorId === me;
+    // Never overwrite a page of this person's own, unless they lost the right to write
+    // it there; loseAccess has already kept their edits as a copy.
+    if (local && !local.team && !(mine && !canWrite(state, remote.spaceId))) continue;
+    if (mine && canWrite(state, remote.spaceId)) {
       const outcome = adoptPage(store, state, remote, files.get(remote.id) ?? [], result.errors);
       if (outcome === "waiting") live.add(remote.id); // read-only until its files arrive
       if (outcome) changed = true;
       continue;
     }
     live.add(remote.id);
-    const team = { authorPersonId: remote.authorPersonId ?? null, authorName: people.get(remote.authorPersonId) ?? null,
-      spaceId: remote.spaceId, spaceName: spaces.get(remote.spaceId)?.name ?? null, access: remote.access ?? "view" };
+    // A page of their own in a team they can no longer write in is read-only too.
+    const team = { authorPersonId: remote.authorPersonId ?? null, authorName: mine ? null : people.get(remote.authorPersonId) ?? null,
+      spaceId: remote.spaceId, spaceName: spaces.get(remote.spaceId)?.name ?? local?.team?.spaceName ?? null,
+      access: remote.access ?? "view", ...(mine ? { lostAccess: true } : {}) };
     const seen = state.mirrored(remote.id);
     const arrived = files.get(remote.id) ?? [];
     if (seen?.version === remote.version && local && !local.metadata?.purgedAt && !arrived.length
-      && local.team.authorName === team.authorName && local.team.spaceName === team.spaceName) continue;
+      && local.team.authorName === team.authorName && local.team.spaceName === team.spaceName
+      && !!local.team.lostAccess === !!team.lostAccess) continue;
     const filed = remote.folderId && state.folderSent(remote.folderId) && store._raw("folder", remote.folderId)?.deletedAt === null;
     const page = { id: remote.id, title: remote.title ?? "", content: remote.content, team,
       folderId: filed ? remote.folderId : state.rootForSpace(remote.spaceId) ?? folders.sharedRoot(store, state) };
@@ -426,6 +434,7 @@ function apply(store, state, result) {
       state.markNoteSent(remote.id, agrees ? hashOf({ ...where, title: current.title, content: current.content, text: current.plainText }) : "", remote.version);
     }
   }
+  const lost = loseAccess(store, state, result);
   const mirrors = mirrorPages(store, state, result);
   const workspaceId = store.identity.id;
   let applied = 0;
@@ -454,7 +463,56 @@ function apply(store, state, result) {
     state.markSent(remote.id, inStep ? hashOf(payload) : "", remote.version);
   }
   if (result.errors.length) state.recordError(result.errors[0]);
-  return { removed: false, applied, notesChanged: notesChanged || foldersChanged || mirrors.changed, dropped: mirrors.dropped };
+  return { removed: false, applied, notesChanged: notesChanged || foldersChanged || mirrors.changed || lost, dropped: mirrors.dropped };
+}
+
+const canWrite = (state, spaceId) => state.spaces().some((s) => s.id === spaceId && s.role === "editor");
+
+// A page this Mac wrote, in a team the person can no longer write in (removed from the
+// team, or made a viewer): the team keeps the page as it was last sent; edits made here
+// since are saved as a copy in My notes, files included, and the person is told. The
+// page itself then shows read-only until they can write there again (TEAM_PLAN §6.7).
+function loseAccess(store, state, result) {
+  const me = state.binding().accountUserId;
+  let changed = false;
+  // Every pull lists the person's My notes; without it the team list cannot be trusted.
+  if (!state.privateSpaceId()) return false;
+  for (const remote of state.remoteNotes()) {
+    if (remote.authorId !== me || !state.noteSent(remote.id) || canWrite(state, remote.spaceId)) continue;
+    const local = store._raw("note", remote.id);
+    if (!local || local.team || local.deletedAt) { state.forgetNoteSent(remote.id); continue; }
+    const where = folders.location(store, state, local.folderId);
+    const unsent = state.noteSent(remote.id).hash !== hashOf({ ...where, title: local.title, content: local.content, text: local.plainText });
+    if (unsent && (local.contentHash !== hashContent(remote.content) || local.title !== (remote.title ?? ""))) {
+      const copy = copyToMyNotes(store, local);
+      result.errors.push(`You can no longer edit "${local.title || "Untitled page"}" in ${state.spaces().find((s) => s.id === remote.spaceId)?.name ?? "its team"}. Your latest edits are saved as "${copy.title}" in My notes.`);
+    }
+    state.forgetNoteSent(remote.id);
+    changed = true;
+  }
+  return changed;
+}
+
+const hashContent = (content) => require("../workspace/content").documentContent(content).contentHash;
+
+// A copy in My notes with its own copies of the page's files.
+function copyToMyNotes(store, note) {
+  const { randomUUID: id } = require("node:crypto");
+  const ctx = () => ({ workspaceId: store.identity.id, clientRequestId: id() });
+  const title = `${note.title || "Untitled page"} (your copy)`.slice(0, 500);
+  const copy = store.createNote(ctx(), { title, content: require("../workspace/content").withoutAttachments(note.content, new Set()) });
+  const ids = new Map();
+  for (const attachmentId of require("../workspace/content").attachmentIds(note.content)) {
+    const file = store._raw("attachment", attachmentId);
+    if (!file || file.deletedAt) continue;
+    const made = store.putAttachment(ctx(), { noteId: copy.id, displayName: file.displayName, mediaType: file.mediaType },
+      store.readAttachment({ workspaceId: store.identity.id }, attachmentId));
+    ids.set(attachmentId, made.id);
+  }
+  const remap = (node) => node.type === "noteAttachment"
+    ? (ids.has(node.attrs?.id) ? { ...node, attrs: { ...node.attrs, id: ids.get(node.attrs.id) } } : null)
+    : node.content ? { ...node, content: node.content.map(remap).filter(Boolean) } : node;
+  return store.updateNote({ ...ctx(), expectedRevision: copy.revision }, copy.id, { content: remap(note.content) });
 }
 
 // This person's own page from elsewhere becomes an ordinary, editable page here, with

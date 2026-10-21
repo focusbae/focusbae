@@ -121,6 +121,7 @@ export function useRecording() {
 }
 export function RecordDialog({
   workspace,
+  shared,
   status,
   close,
   started,
@@ -214,7 +215,15 @@ export function RecordDialog({
         }}
       >
         <div className="dialog-heading">
-          <h2>New recording</h2>
+          <div>
+            <h2>New recording</h2>
+            {/* Every recording belongs to one workspace; say which, plainly, so a client
+                call is not saved into the wrong company's workspace (TEAM_PLAN §6.6). */}
+            <p className="record-destination">
+              Saving to <strong>{workspace.name}</strong>
+              {shared ? " · team workspace: what you accept can be shared with its teams" : " · on this Mac only"}
+            </p>
+          </div>
           <Tool
             label="Close recording dialog"
             icon={X}

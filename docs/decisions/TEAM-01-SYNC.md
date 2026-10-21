@@ -122,6 +122,12 @@ server version recorded as sent so they are not pushed straight back. Such a pag
 read-only and labelled as arriving, until all its files are here: an edit to a page
 missing an image would remove that image for everyone.
 
+A page this Mac wrote, in a team the person can no longer write in (removed from it, or
+made a viewer), keeps the team's version: edits made here and not yet sent are saved as
+"<title> (your copy)" in My notes with copies of its files, the person is told, and the
+page shows read-only until they can write there again. The refused push is not reported
+as an error; the explanation comes from the apply step.
+
 Signing out erases teammates' copies, their files and the team ledger from every team
 workspace on this Mac (closed ones are opened briefly), keeps the person's own pages and
 folders, and resets the cursor so signing in again pulls everything back. The same runs

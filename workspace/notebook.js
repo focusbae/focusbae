@@ -32,7 +32,8 @@ function publicNote(note) {
     pinned: note.metadata?.pinned === true,
     importWarnings: note.metadata?.importWarnings ?? [],
     originalAttachmentId: note.metadata?.originalAttachmentId ?? null,
-    team: note.team ? { readOnly: true, authorName: note.team.authorName ?? null, spaceName: note.team.spaceName ?? null, arriving: !!note.team.arriving } : null,
+    team: note.team ? { readOnly: true, authorName: note.team.authorName ?? null, spaceName: note.team.spaceName ?? null,
+      arriving: !!note.team.arriving, lostAccess: !!note.team.lostAccess } : null,
   };
 }
 const methods = {

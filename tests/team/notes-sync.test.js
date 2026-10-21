@@ -16,7 +16,7 @@ const WS = "11111111-1111-4111-8111-111111111111";
 
 // Enough of the team service for notes: versions, deletions, uploads and the pull.
 class NotesServer {
-  constructor() { this.folders = new Map(); this.notes = new Map(); this.objects = new Map(); this.registered = new Map(); this.calls = []; this.seq = 0; }
+  constructor() { this.engRole = "editor"; this.folders = new Map(); this.notes = new Map(); this.objects = new Map(); this.registered = new Map(); this.calls = []; this.seq = 0; }
   async rpc(name, args) {
     this.calls.push(name);
     if (name === "save_folder") {
@@ -34,6 +34,7 @@ class NotesServer {
       return null;
     }
     if (name === "upsert_note") {
+      if (args.p_space === ENG && this.engRole !== "editor") throw Object.assign(new Error("not allowed"), { code: "FORBIDDEN" });
       const old = this.notes.get(args.p_id);
       if (old && args.p_version != null && old.version !== args.p_version)
         throw Object.assign(new Error("changed elsewhere"), { code: "VERSION_CONFLICT" });
@@ -52,7 +53,7 @@ class NotesServer {
       cursor: this.seq, workspace: { name: "Acme", role: "member", processingLevelMax: 1 }, me: { personId: "me" },
       spaces: [
         { id: PRIVATE, kind: "private", name: "My notes", role: "editor" },
-        { id: ENG, kind: "custom", name: "Eng", role: "editor" },
+        ...(this.engRole ? [{ id: ENG, kind: "custom", name: "Eng", role: this.engRole }] : []),
         { id: SALES, kind: "custom", name: "Sales", role: "viewer" },
       ],
       folders: [...this.folders.values()].filter((f) => !f.deleted && f.seq > args.p_since),
@@ -316,7 +317,7 @@ test("a teammate's page arrives read-only under its team and folder, and is neve
   const page = store.get(ws(store), "note", remote.id);
   assert.equal(page.plainText, "Alice wrote this");
   assert.equal(page.folderId, specs.id);
-  assert.deepEqual(require("../../workspace/notebook").publicNote(page).team, { readOnly: true, authorName: "Alice", spaceName: "Eng", arriving: false });
+  assert.deepEqual(require("../../workspace/notebook").publicNote(page).team, { readOnly: true, authorName: "Alice", spaceName: "Eng", arriving: false, lostAccess: false });
 
   assert.throws(() => store.updateNote(mutation(store, page.revision), page.id, { content: document("mine now") }), /teammate/);
   assert.throws(() => store.delete(mutation(store, page.revision), "note", page.id), /teammate/);
@@ -498,4 +499,38 @@ test("signing out erases teammates' copies and the team ledger, keeps own pages,
   assert.deepEqual([state.mirroredIds(), state.remoteNotes(), state.binding().cursor], [[], [], 0]);
   await round(store, state, server);
   assert.equal(store.get(ws(store), "note", theirs.id).title, "Theirs", "signed in again, it is back");
+});
+
+test("removed from a team, edits not yet sent are saved as a copy in My notes and the page turns read-only", async (t) => {
+  const { store, state, server } = await setup(t);
+  await round(store, state, server);
+  const page = store.createNote(mutation(store), { title: "Spec", content: document("Agreed"), folderId: state.rootForSpace(ENG) });
+  const image = store.putAttachment(mutation(store), { noteId: page.id, displayName: "board.png", mediaType: "image/png" }, PNG);
+  withAttachment(store, page, image);
+  await round(store, state, server);
+  assert.equal(server.notes.get(page.id).spaceId, ENG);
+  const sent = server.notes.get(page.id).text;
+  // Edited on the Mac while an admin removes them from Eng, before the edit is sent.
+  server.engRole = null;
+  const current = store.get(ws(store), "note", page.id);
+  store.updateNote(mutation(store, current.revision), page.id, { title: "Spec v2", content: { ...current.content, content: [{ type: "paragraph", content: [{ type: "text", text: "My late edit" }] }, current.content.content[1]] } });
+  await round(store, state, server);
+  assert.equal(server.notes.get(page.id).text, sent, "the team's page is untouched");
+  const original = store.get(ws(store), "note", page.id);
+  assert.equal(require("../../workspace/notebook").publicNote(original).team.lostAccess, true);
+  assert.equal(original.plainText, sent, "the page shows what the team has");
+  const copy = store.list(ws(store), "note").find((n) => n.title === "Spec v2 (your copy)");
+  assert.equal(copy.plainText, "My late edit");
+  const copiedImage = copy.content.content[1].attrs.id;
+  assert.notEqual(copiedImage, image.id);
+  assert.deepEqual(store.readAttachment(ws(store), copiedImage), PNG, "the copy has its own copy of the image");
+  assert.equal(folders.location(store, state, copy.folderId).spaceId, PRIVATE);
+  assert.match(state.binding().lastError, /saved as "Spec v2 \(your copy\)" in My notes/);
+  const calls = server.calls.length;
+  await round(store, state, server);
+  assert.deepEqual(server.calls.slice(calls).filter((c) => c === "upsert_note").length, 1, "only the copy is sent, to My notes");
+
+  server.engRole = "editor"; // added back
+  await round(store, state, server);
+  assert.equal(store.get(ws(store), "note", page.id).team ?? null, null, "editable again");
 });

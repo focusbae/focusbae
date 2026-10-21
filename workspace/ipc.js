@@ -93,6 +93,7 @@ const CHANNELS = [
   "capture.retry",
   "capture.cancel",
   "capture.discard",
+  "capture.move",
   "capture.identifySpeaker",
   "capture.playbackInfo",
   "capture.playbackRead",
@@ -188,11 +189,14 @@ const PUBLIC_ERRORS = {
   ALREADY_EXISTS: "That team workspace is already on this Mac.",
   FORBIDDEN: "You don't have access to that team workspace.",
   READ_ONLY: "This page belongs to a teammate. Only they can change it.",
+  // Says exactly what stops the move; the message is written for the person.
+  MOVE_BLOCKED: null,
 };
 function publicError(error) {
   const code = Object.hasOwn(PUBLIC_ERRORS, error.code)
     ? error.code
     : "UNAVAILABLE";
+  if (code === "MOVE_BLOCKED") return { ok: false, error: { code, message: error.message, retryable: false } };
   return {
     ok: false,
     error: {
@@ -568,6 +572,51 @@ function registerWorkspaceIPC({
       catalog.scoped(input.workspaceId);
       if (result.response !== 1) return false;
       recording.discard(input.id);
+      return true;
+    },
+    // Moves a finished recording, and everything quoted from it, to another workspace
+    // on this Mac (TEAM_PLAN §6.6). Refused once its source team holds a commitment.
+    "capture.move": async (input, event) => {
+      v.object(input, ["workspaceId", "id", "targetWorkspaceId"]);
+      const source = catalog.scoped(input.workspaceId);
+      const id = v.uuid(input.id), targetId = v.uuid(input.targetWorkspaceId);
+      check(!recording?.busy(), "WORKSPACE_BUSY", "Stop capture and processing before moving a recording");
+      const entry = catalog.entries.find((item) => item.id === targetId);
+      check(entry && targetId !== source.identity.id, "NOT_FOUND", "Choose another workspace on this Mac");
+      const path = require("node:path");
+      const { TeamState } = require("../team/state");
+      const transfer = require("./transfer");
+      const sourceTeam = TeamState.exists(source._directory) ? new TeamState(source._directory) : null;
+      const shared = new Set(sourceTeam?.sharedIds() ?? []);
+      sourceTeam?.close();
+      const bundle = transfer.collect(source, id);
+      const reasons = transfer.blockers(bundle, shared);
+      check(!reasons.length, "MOVE_BLOCKED", reasons.join(" "));
+      const targetDirectory = path.join(catalog.root, entry.directory);
+      const kept = bundle.actions.filter((a) => ["accepted", "deferred", "done"].includes(a.status)).length;
+      const result = await dialog.showMessageBox(getWindow(), {
+        type: "warning",
+        message: `Move "${bundle.recording.title || "this recording"}" to ${entry.name}?`,
+        detail: [
+          `Its transcript, speakers, commitments and audio leave ${catalog.active().name} and can no longer be found there.`,
+          TeamState.exists(targetDirectory) && kept
+            ? `${kept} ${kept === 1 ? "commitment" : "commitments"} from it will be shared with ${entry.name}'s team when it next syncs.`
+            : null,
+        ].filter(Boolean).join(" "),
+        buttons: ["Cancel", "Move"],
+        defaultId: 0,
+        cancelId: 0,
+      });
+      check(trusted(event, getWindow()), "PERMISSION_DENIED", "Workspace window closed");
+      catalog.scoped(input.workspaceId);
+      if (result.response !== 1) return false;
+      const target = await require("./index").openWorkspace({ directory: targetDirectory });
+      try {
+        transfer.moveRecording({ source, target, recordingId: id, shared });
+      } finally {
+        target.close();
+      }
+      emit("workspace.changed");
       return true;
     },
     bootstrap: () => snapshot(),

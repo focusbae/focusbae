@@ -66,6 +66,7 @@ contextBridge.exposeInMainWorld("focusbaeWorkspace", {
       "retry",
       "cancel",
       "discard",
+      "move",
       "identifySpeaker",
       "playbackInfo",
       "playbackRead",

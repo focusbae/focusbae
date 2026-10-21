@@ -419,3 +419,9 @@ ul.recording-warning {
   color: var(--muted);
   font-size: 12px;
 }
+
+.move-workspace {
+  max-width: 200px;
+  height: 30px;
+  font-size: 13px;
+}

@@ -14,6 +14,7 @@ import {
   Download,
   Upload,
   Copy,
+  FolderInput,
 } from "lucide-react";
 import "./recordings.css";
 import { AudioPlayer } from "./audio-player";
@@ -712,6 +713,26 @@ export function Recordings({
       .then((value) => current && setStorage(value)).catch(() => current && setStorage(null));
     return () => { current = false; };
   }, [workspace.id, selectedId, revision, attempt]);
+  // Other workspaces on this Mac a finished recording can move to (TEAM_PLAN §6.6).
+  const [elsewhere, setElsewhere] = useState([]);
+  const [moving, setMoving] = useState(false);
+  useEffect(() => {
+    let current = true;
+    unwrap(api.workspace.list()).then((all) => current && setElsewhere(all.filter((w) => w.id !== workspace.id))).catch(() => {});
+    return () => { current = false; };
+  }, [workspace.id]);
+  const move = async (targetWorkspaceId) => {
+    setMoving(false);
+    setBusy(true);
+    setError(null);
+    try {
+      if (await unwrap(api.capture.move({ workspaceId: workspace.id, id: selectedId, targetWorkspaceId }))) select(null);
+    } catch (failure) {
+      setError(failure);
+    } finally {
+      setBusy(false);
+    }
+  };
   const run = async (method) => {
     if (method === "discard") player.current?.pause();
     setBusy(true);
@@ -868,6 +889,18 @@ export function Recordings({
                   </p>
                 </div>
                 <div className="processing-tools">
+                  {elsewhere.length > 0 && ["captured", "interrupted", "failed"].includes(record.state) && (
+                    moving ? (
+                      <select aria-label="Move to workspace" className="move-workspace" autoFocus defaultValue=""
+                        onChange={(event) => event.target.value && move(event.target.value)} onBlur={() => setMoving(false)}>
+                        <option value="" disabled>Move to…</option>
+                        {elsewhere.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+                      </select>
+                    ) : (
+                      <Tool label="Move to another workspace" icon={FolderInput}
+                        disabled={busy || !!status?.active || !!status?.processingId} onClick={() => setMoving(true)} />
+                    )
+                  )}
                   {hasAudio && record.transcriptionState !== "complete" &&
                     !speechReady(status, record.language) && (
                       <button type="button" onClick={setupModel}>

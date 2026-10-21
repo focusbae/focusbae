@@ -28,3 +28,9 @@ global.workspaceProbe.seedTeam = () => {
       return { workspaceId, noteId: note.id, root, folder: folder.id };
 
 };
+global.workspaceProbe.seedManyFolders = () => {
+  const { randomUUID } = require('node:crypto');
+  const store = global.workspaceProbe.catalog.store;
+  const root = store._folderRows(store.identity.id).find((folder) => folder.name === 'Engineering' && !folder.parentId);
+  for (let index = 1; index <= 24; index++) store.createFolder({ workspaceId: store.identity.id, clientRequestId: randomUUID() }, { name: `Project ${index}`, parentId: root.id });
+};

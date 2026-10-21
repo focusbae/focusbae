@@ -536,7 +536,6 @@ function App() {
   const teamBindings = useTeamWorkspaces();
   const [error, setError] = useState(null);
   const [page, setPage] = useState("Today");
-  const [collapsed, setCollapsed] = useState(false);
   const [creating, setCreating] = useState(false);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -747,7 +746,7 @@ function App() {
   const { workspace, workspaces, privacy } = state;
   const shared = teamBindings.get(workspace.id);
   return (
-    <div className={`app ${collapsed ? "collapsed" : ""}`}>
+    <div className="app horizontal-shell">
       <aside className="sidebar">
         <div className="brand">
           <img className="brand-mark" src={brandMark} alt="" />
@@ -791,7 +790,7 @@ function App() {
           </IconButton>
         </div>
         <nav aria-label="Workspace navigation">
-          {pages.map(([name, Icon]) => (
+          {pages.filter(([name]) => name !== "Settings").map(([name, Icon]) => (
             <button
               key={name}
               aria-current={page === name ? "page" : undefined}
@@ -819,21 +818,12 @@ function App() {
       <div className="workspace-main">
         <header>
           <div className="page-name">
-            <IconButton
-              label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-              onClick={() => setCollapsed((value) => !value)}
-            >
-              {collapsed ? (
-                <PanelLeftOpen size={19} />
-              ) : (
-                <PanelLeftClose size={19} />
-              )}
-            </IconButton>
             <h1 ref={heading} tabIndex={-1}>
               {page}
             </h1>
           </div>
           <div className="header-actions">
+            <IconButton label="Settings" disabled={busy} aria-current={page === "Settings" ? "page" : undefined} onClick={() => navigate("Settings")}><Settings size={17} /></IconButton>
             <span className="save-indicator" role="status">
               {busy ? (
                 <LoaderCircle className="spin" size={15} />

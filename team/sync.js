@@ -2,6 +2,8 @@
 const { createHash, randomUUID } = require("node:crypto");
 const { ACTION_TRANSITIONS } = require("../workspace/domain");
 
+const folders = require("./folders");
+
 const SHAREABLE = new Set(["accepted", "deferred", "done", "dropped"]);
 const PAGE = 1000;
 // The team service's storage limit per file; larger files stay on this Mac.
@@ -100,6 +102,7 @@ const hashOf = (payload) => createHash("sha256").update(JSON.stringify(payload))
 
 // Phase 1, under the workspace lock: decide what to send.
 function plan(store, state) {
+  const folderWork = folders.plan(store, state);
   const workspaceId = store.identity.id;
   const shares = [];
   const unshares = [];
@@ -117,7 +120,7 @@ function plan(store, state) {
   }
   // Shared before but gone from this workspace entirely (purged): withdraw it too.
   for (const id of state.sharedIds()) if (!localIds.has(id)) unshares.push(id);
-  return { shares, unshares, statusOnly, ...planNotes(store, state) };
+  return { shares, unshares, statusOnly, ...folderWork, ...planNotes(store, state) };
 }
 
 // Notes go to My notes unless the person chose a team. Until the first pull says which
@@ -126,15 +129,19 @@ function planNotes(store, state) {
   const workspaceId = store.identity.id;
   const privateSpace = state.privateSpaceId();
   const notes = [];
+  const noteSnapshots = {};
   const deletions = [];
   const uploads = [];
   let budget = UPLOAD_BUDGET_BYTES;
-  if (!privateSpace) return { notes, deletions, uploads };
+  if (!privateSpace) return { notes, deletions, uploads, noteSnapshots };
   const live = new Set();
   for (const note of listAll(store, workspaceId, "note")) {
     if (note.deletedAt || note.metadata?.purgedAt) continue;
     live.add(note.id);
-    const payload = { spaceId: state.noteSpace(note.id) ?? privateSpace, title: note.title, content: note.content, text: note.plainText };
+    const where = note.kind === "daily" ? { spaceId: privateSpace, folderId: null } : folders.location(store, state, note.folderId);
+    if (!state.spaces().some((s) => s.id === where.spaceId && s.role === "editor")) continue;
+    const payload = { ...where, title: note.title, content: note.content, text: note.plainText };
+    noteSnapshots[note.id] = { folderId: note.folderId ?? null, title: note.title, content: note.content };
     const hash = hashOf(payload);
     const sent = state.noteSent(note.id);
     if (!sent || sent.hash !== hash) notes.push({ id: note.id, payload, hash, version: sent?.version ?? null });
@@ -144,7 +151,7 @@ function planNotes(store, state) {
     }
   }
   for (const id of state.sentNoteIds()) if (!live.has(id)) deletions.push(id);
-  return { notes, deletions, uploads };
+  return { notes, deletions, uploads, noteSnapshots };
 }
 
 // One attachment to send, if it is new or changed since it was last sent. Browsers
@@ -202,15 +209,39 @@ async function exchange(account, state, work) {
       else errors.push(error.message);
     }
   }
+  const foldersSent = [], folderAliases = [], folderFailures = new Set();
+  const aliases = new Map();
+  for (const f of work.folders ?? []) {
+    if (folderFailures.has(f.payload.parentId)) { folderFailures.add(f.id); continue; }
+    try {
+      const row = await account.rpc("save_folder", { p_workspace: ws, p_id: f.id, p_space: f.payload.spaceId,
+        p_parent: aliases.get(f.payload.parentId) ?? f.payload.parentId, p_name: f.payload.name, p_version: f.version });
+      foldersSent.push({ id: row.id, hash: f.hash, version: row.version });
+      if (row.id !== f.id) { aliases.set(f.id, row.id); folderAliases.push({ from: f.id, to: row.id }); }
+    } catch (error) {
+      if (error.code === "POLICY_DENIED" || error.code === "SIGNED_OUT") throw error;
+      folderFailures.add(f.id);
+      if (error.code !== "VERSION_CONFLICT") errors.push(error.message);
+    }
+  }
+  for (const f of work.folderDeletions ?? []) {
+    try { await account.rpc("delete_folder", { p_id: f.id, p_version: f.version }); }
+    catch (error) {
+      if (error.code === "POLICY_DENIED" || error.code === "SIGNED_OUT") throw error;
+      if (error.code !== "VERSION_CONFLICT") errors.push(error.message);
+    }
+  }
   const notesSent = [];
   const notesDeleted = [];
   const uploaded = [];
   const rethrow = (error) => { if (error.code === "POLICY_DENIED" || error.code === "SIGNED_OUT") throw error; };
   for (const note of work.notes ?? []) {
+    if (folderFailures.has(note.payload.folderId)) continue;
     try {
       const row = await account.rpc("upsert_note", {
         p_workspace: ws, p_id: note.id, p_space: note.payload.spaceId, p_title: note.payload.title,
         p_content: note.payload.content, p_text: note.payload.text, p_version: note.version,
+        p_folder: aliases.get(note.payload.folderId) ?? note.payload.folderId ?? null,
       });
       notesSent.push({ id: note.id, hash: note.hash, version: row.version });
     } catch (error) {
@@ -243,9 +274,9 @@ async function exchange(account, state, work) {
       if (error.code === "FORBIDDEN") notesDeleted.push(id); else errors.push(error.message);
     }
   }
-  const pushed = { sent, withdrawn, notesSent, notesDeleted, uploaded, errors };
+  const pushed = { sent, withdrawn, notesSent, notesDeleted, uploaded, errors, foldersSent, folderAliases, folderSnapshots: work.folderSnapshots, noteSnapshots: work.noteSnapshots };
   try {
-    const pull = await account.rpc("pull_changes", { p_workspace: ws, p_since: binding.cursor });
+    const pull = await account.rpc("pull_changes", { p_workspace: ws, p_since: folderAliases.length ? 0 : binding.cursor });
     return { ...pushed, pull };
   } catch (error) {
     if (error.code === "FORBIDDEN") return { ...pushed, removed: true };
@@ -265,7 +296,35 @@ function apply(store, state, result) {
     state.markRemoved();
     return { removed: true, applied: 0 };
   }
+  // Space membership is needed before creating local team headings.
   state.applyPull(result.pull);
+  const foldersChanged = folders.apply(store, state, result);
+  let notesChanged = false;
+  for (const remote of result.pull.notes ?? []) {
+    const local = store._raw("note", remote.id);
+    const sent = state.noteSent(remote.id);
+    if (!local || local.deletedAt || !sent) continue;
+    const snapshot = result.noteSnapshots?.[remote.id];
+    if (remote.spaceId !== state.privateSpaceId() && !state.rootForSpace(remote.spaceId)) continue;
+    const target = remote.folderId ?? state.rootForSpace(remote.spaceId) ?? null;
+    // Reconcile server-side filing even after a rejected stale push, while preserving
+    // any move the user made during this request.
+    if (remote.version > sent.version && snapshot && (local.folderId ?? null) === snapshot.folderId && local.kind !== "daily") {
+      if ((local.folderId ?? null) !== target && (!target || store._raw("folder", target))) {
+        store.moveNote({ workspaceId: store.identity.id, clientRequestId: randomUUID(), expectedRevision: local.revision }, local.id, target);
+        notesChanged = true;
+      }
+    }
+    // Advance the version even when only sharing metadata changed. The next round
+    // can send local writing on top of the latest server placement without looping.
+    if (remote.version >= sent.version) {
+      const current = store._raw("note", remote.id);
+      const where = current.kind === "daily" ? { spaceId: state.privateSpaceId(), folderId: null } : folders.location(store, state, current.folderId);
+      const agrees = current.title === remote.title && JSON.stringify(current.content) === JSON.stringify(remote.content)
+        && where.spaceId === remote.spaceId && where.folderId === (remote.folderId ?? null);
+      state.markNoteSent(remote.id, agrees ? hashOf({ ...where, title: current.title, content: current.content, text: current.plainText }) : "", remote.version);
+    }
+  }
   const workspaceId = store.identity.id;
   let applied = 0;
   for (const remote of result.pull.commitments) {
@@ -293,7 +352,10 @@ function apply(store, state, result) {
     state.markSent(remote.id, inStep ? hashOf(payload) : "", remote.version);
   }
   if (result.errors.length) state.recordError(result.errors[0]);
-  return { removed: false, applied };
+  return { removed: false, applied, notesChanged: notesChanged || foldersChanged };
 }
 
-module.exports = { plan, exchange, apply, payloadFor, sharedPeople, hashOf };
+// Cursor and mappings commit only after all local changes succeed. A failed local
+// write therefore retries the same pull instead of skipping it forever.
+const applyAtomically = (store, state, result) => state.db.transaction(() => store._db.transaction(() => apply(store, state, result))())();
+module.exports = { plan, exchange, apply: applyAtomically, payloadFor, sharedPeople, hashOf };

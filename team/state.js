@@ -20,6 +20,8 @@ CREATE TABLE IF NOT EXISTS binding (
   last_synced_at TEXT,
   last_error TEXT
 ) STRICT;
+CREATE TABLE IF NOT EXISTS team_roots (space_id TEXT PRIMARY KEY, folder_id TEXT NOT NULL UNIQUE) STRICT;
+CREATE TABLE IF NOT EXISTS folders_sent (id TEXT PRIMARY KEY, sent_hash TEXT NOT NULL, server_version INTEGER NOT NULL) STRICT;
 CREATE TABLE IF NOT EXISTS spaces (id TEXT PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL, role TEXT) STRICT;
 CREATE TABLE IF NOT EXISTS people (id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT, is_member INTEGER NOT NULL) STRICT;
 -- The shared ledger as last seen on the server, including teammates' commitments.
@@ -109,6 +111,13 @@ class TeamState {
       this.db.prepare("UPDATE binding SET status = 'removed', cursor = 0").run();
     })();
   }
+  roots() { return this.db.prepare("SELECT space_id AS spaceId, folder_id AS folderId FROM team_roots").all(); }
+  rootForSpace(id) { return this.db.prepare("SELECT folder_id FROM team_roots WHERE space_id = ?").get(id)?.folder_id ?? null; }
+  setRoot(space, folder) { this.db.prepare("INSERT INTO team_roots VALUES (?, ?)").run(space, folder); }
+  folderSent(id) { return this.db.prepare("SELECT sent_hash AS hash, server_version AS version FROM folders_sent WHERE id = ?").get(id) ?? null; }
+  markFolderSent(id, hash, version) { this.db.prepare("INSERT INTO folders_sent VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET sent_hash=excluded.sent_hash, server_version=excluded.server_version").run(id, hash, version); }
+  forgetFolderSent(id) { this.db.prepare("DELETE FROM folders_sent WHERE id = ?").run(id); }
+  sentFolderIds() { return this.db.prepare("SELECT id FROM folders_sent").all().map((r) => r.id); }
   commitments() {
     return this.db.prepare("SELECT data_json FROM commitments").all().map((row) => JSON.parse(row.data_json));
   }
@@ -150,7 +159,6 @@ class TeamState {
     if (spaceId === null) return this.db.prepare("DELETE FROM note_spaces WHERE note_id = ?").run(noteId);
     const space = this.db.prepare("SELECT kind, role FROM spaces WHERE id = ?").get(spaceId);
     if (!space || space.role !== "editor") throw Object.assign(new Error("You can't add notes to that team"), { code: "INVALID_INPUT" });
-    if (space.kind === "private") return this.db.prepare("DELETE FROM note_spaces WHERE note_id = ?").run(noteId);
     this.db.prepare(`INSERT INTO note_spaces VALUES (?, ?, ?) ON CONFLICT(note_id) DO UPDATE SET
       space_id = excluded.space_id, updated_at = excluded.updated_at`).run(noteId, spaceId, new Date().toISOString());
   }

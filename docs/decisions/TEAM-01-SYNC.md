@@ -88,11 +88,23 @@ win, including choosing nobody.
 
 ## Notes and attachments (2026-10-21)
 
-A note written in a team workspace syncs to the person's **My notes** (private) until
-they choose a team in the note header ("Visible to"). Nothing is sent before the first
-pull has said which space is My notes, so a note is never sent to a guessed place. The
-choice lives in `team.sqlite` `note_spaces`; only teams the person can edit are offered.
+A note written in a team workspace syncs to **My notes** (private) until
+its location is changed. Each writable team appears as a local top-level folder;
+subfolders are shared, have stable server ids, and may be nested eight levels
+inside a team. The existing folder picker is the single location control. The old
+"Visible to" choices are migrated into the corresponding team section. A page's
+home team is determined by its location; other explicit team shares and guest
+access are managed on the web and survive a move. The Mac asks before a move
+changes the home team. Daily notes stay in My notes.
 
+Folder push precedes note push, so a page never names a folder that has not been
+created on the server. A pull applies incoming folder structure and filing while
+preserving writing done locally during the network request. Same-name folder
+creation resolves to the server's canonical id and moves local pages into it.
+The local store and sync cursor commit in a coordinated apply; a failed local
+write retries the pull. Team headings are local only, and Personal workspaces
+never gain team state. Only folders in writable teams appear on the Mac today;
+viewer-only team folders remain available on the web.
 Until co-editing, only the author changes a note's content; teammates read and comment
 on the web, and the author or an admin can share it with another team or a guest. Notes
 use the same version guard as commitments. The web renders the stored TipTap JSON with
@@ -110,4 +122,5 @@ round holds at most 120 MB of uploads in memory; the rest go in later rounds.
 - Sync only runs for the open workspace; background sync of other team workspaces.
 - Team spaces other than "everyone" from the Mac (choose the team when accepting).
 - Teammates' notes on the Mac (they are pulled into `remote_notes`; shown on the web today).
+- Applying another Mac's edits to the same authored page. Snapshot conflicts remain guarded until co-editing.
 - Co-editing with Yjs (TEAM_PLAN weeks 7–8), which replaces author-only snapshots.

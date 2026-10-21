@@ -23,7 +23,7 @@ function publicFolder(folder, counts = {}) {
 // rows beneath it, and a stored path is the thing that goes stale.
 function pathOf(byId, id) {
   const names = [];
-  for (let current = byId.get(id), depth = 0; current && depth <= MAX_DEPTH; current = byId.get(current.parentId), depth += 1)
+  for (let current = byId.get(id), depth = 0; current && depth <= MAX_DEPTH + 1; current = byId.get(current.parentId), depth += 1)
     names.unshift(current.name);
   return names.join(' / ');
 }
@@ -44,6 +44,7 @@ const methods = {
       const parent = byId.get(current);
       check(parent, 'NOT_FOUND', 'Parent folder does not exist');
       check(parent.id !== movingId, 'INVALID_INPUT', 'A folder cannot be moved inside itself');
+      if (this._teamFolderRoots?.has(parent.id)) level -= 1;
       check(level <= MAX_DEPTH, 'LIMIT_REACHED', `Folders can be nested ${MAX_DEPTH} deep`);
       current = parent.parentId;
     }
@@ -125,9 +126,31 @@ const methods = {
       check(old, 'NOT_FOUND', 'Folder does not exist');
       this._expected(ctx, old);
       const moved = { notes: 0, folders: 0 };
+      // A child may have the same name as a sibling at the destination. Merge
+      // recursively before retiring the container, matching the server rule.
+      const relocate = (sourceId, destinationId) => {
+        for (const row of this._db.prepare(
+          `SELECT id FROM notes WHERE workspace_id=? AND deleted_at IS NULL AND json_extract(data_json, '$.folderId')=?`,
+        ).all(ctx.workspaceId, sourceId)) {
+          const note = this._live('note', row.id);
+          this._save('note', this._next(note, { folderId: destinationId }));
+          moved.notes += 1;
+        }
+        for (const row of this._db.prepare('SELECT id FROM folders WHERE workspace_id=? AND parent_id=? AND deleted_at IS NULL').all(ctx.workspaceId, sourceId)) {
+          const child = this._live('folder', row.id);
+          const twin = this._folderRows(ctx.workspaceId).find((f) => f.id !== child.id && f.parentId === destinationId && f.name.toLowerCase() === child.name.toLowerCase());
+          if (twin) relocate(child.id, twin.id);
+          else this._save('folder', this._next(child, { parentId: destinationId }));
+          moved.folders += 1;
+        }
+        const source = this._live('folder', sourceId);
+        this._save('folder', this._next(source, { deletedAt: new Date().toISOString() }));
+      };
       for (const row of this._db.prepare('SELECT id FROM folders WHERE workspace_id=? AND parent_id=? AND deleted_at IS NULL').all(ctx.workspaceId, id)) {
         const child = this._live('folder', row.id);
-        this._save('folder', this._next(child, { parentId: old.parentId }));
+        const twin = this._folderRows(ctx.workspaceId).find((f) => f.id !== child.id && f.parentId === old.parentId && f.name.toLowerCase() === child.name.toLowerCase());
+        if (twin) relocate(child.id, twin.id);
+        else this._save('folder', this._next(child, { parentId: old.parentId }));
         moved.folders += 1;
       }
       for (const row of this._db.prepare(

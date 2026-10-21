@@ -183,3 +183,20 @@ dialog::backdrop { background: #14200f55; backdrop-filter: blur(3px); }
   .person-section { padding: 16px; }
 }
 @media (prefers-reduced-motion: reduce) { button { transition: none; } }
+
+/* Utility controls share a baseline, independent of the text beside them. */
+.team-settings .setting-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.team-setting-copy { display: flex; flex-direction: column; gap: 3px; min-width: 0; font-size: 13px; }
+.team-setting-copy > span { overflow-wrap: anywhere; }
+.setting-actions { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.team-settings button, .folder-dialog .dialog-actions button { min-height: 30px; height: 30px; padding: 0 10px; font-size: 12px; line-height: 1; white-space: nowrap; }
+.note-meta { align-items: center; min-height: 44px; padding-top: 0; gap: 12px; }
+.note-meta-left { min-width: 0; flex: 1; gap: 6px; }
+.note-meta-left .note-folder { height: 28px; min-height: 28px; max-width: min(320px, 34vw); padding: 3px 6px; line-height: normal; font-size: 12px; text-overflow: ellipsis; }
+.note-actions { flex-shrink: 0; align-items: center; gap: 3px; }
+.note-actions .icon-button, .library-folder-tools .icon-button { width: 28px; height: 28px; min-height: 28px; padding: 5px; }
+.note-home-hint { display: none; }
+.team-share-row { align-items: end; gap: 10px; }
+.team-share-row label { min-width: 0; flex: 1; }
+.team-share-row select { height: 32px; min-height: 32px; padding-block: 4px; font-size: 12px; }
+@media (max-width: 760px) { .team-settings .setting-row { flex-wrap: wrap; gap: 10px; } .setting-actions { margin-left: auto; } }

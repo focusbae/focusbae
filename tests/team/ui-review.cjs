@@ -1,0 +1,43 @@
+"use strict";
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const assert = require('node:assert/strict');
+const { _electron } = require('playwright');
+const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'focusbae-team-ui-'));
+const output = path.resolve(__dirname, '../../test-results/team-ui');
+fs.mkdirSync(output, { recursive: true });
+const env = { ...process.env, FOCUSBAE_TEAM_URL: 'http://127.0.0.1:3000' };
+delete env.ELECTRON_RUN_AS_NODE; delete env.NODE_OPTIONS;
+(async () => {
+  const app = await _electron.launch({ executablePath: require('electron'), args: [path.resolve(__dirname, 'ui-probe-entry.cjs'), `--workspace-test-profile=${profile}`], env, timeout: 30000 });
+  try {
+    const page = await app.firstWindow();
+    page.setDefaultTimeout(15000);
+    await page.getByRole('heading', { name: 'Today', exact: true }).waitFor();
+    const seeded = await app.evaluate(() => global.workspaceProbe.seedTeam());
+    await page.reload();
+    await page.getByRole('navigation').getByRole('button', { name: 'Notes', exact: true }).click();
+    await page.getByRole('button', { name: 'Acme kickoff', exact: false }).click();
+    const result = await page.evaluate(async () => window.focusbaeWorkspace.folders.list({ workspaceId: (await window.focusbaeWorkspace.bootstrap()).value.workspace.id }));
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.ok(result.value.items.some((f) => f.teamRoot && f.name === 'Engineering'));
+    assert.ok(result.value.items.some((f) => f.name === 'Client work' && f.spaceId === '44444444-4444-4444-8444-444444444444'));
+    await page.getByRole('combobox', { name: 'Folder for this page' }).waitFor();
+    assert.equal(await page.getByRole('combobox', { name: 'Folder for this page' }).inputValue(), seeded.folder);
+    await page.screenshot({ path: path.join(output, 'team-notebook-light.png'), fullPage: true });
+    await page.getByRole('navigation', { name: 'Team folders' }).getByRole('button', { name: /Client work/ }).click();
+    await page.locator('.note-row', { hasText: 'Acme kickoff' }).waitFor();
+    assert.equal(await page.locator('.note-row', { hasText: 'Private thinking' }).count(), 0);
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    const teamHeading = page.getByRole('heading', { name: 'Team workspaces' });
+    await teamHeading.waitFor();
+    await teamHeading.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(output, 'team-settings-light.png'), fullPage: true });
+    await page.getByRole('navigation').getByRole('button', { name: 'Notes', exact: true }).click();
+    await page.getByRole('button', { name: 'Acme kickoff', exact: false }).click();
+    await page.setViewportSize({ width: 710, height: 760 });
+    await page.screenshot({ path: path.join(output, 'team-notebook-narrow.png'), fullPage: true });
+    console.log(`PASS: team folder tree, one location picker and team settings. Screenshots: ${output}`);
+  } finally { await app.close(); fs.rmSync(profile, { recursive: true, force: true }); }
+})().catch((error) => { console.error(error); process.exitCode = 1; });

@@ -3,6 +3,8 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { fixture, mutation, document } = require("../local-first/helpers.cjs");
+const { randomUUID } = require("node:crypto");
+const folders = require("../../team/folders");
 const { TeamState } = require("../../team/state");
 const sync = require("../../team/sync");
 
@@ -12,14 +14,28 @@ const SALES = "55555555-5555-4555-8555-555555555555";
 
 // Enough of the team service for notes: versions, deletions, uploads and the pull.
 class NotesServer {
-  constructor() { this.notes = new Map(); this.objects = new Map(); this.registered = new Map(); this.calls = []; this.seq = 0; }
+  constructor() { this.folders = new Map(); this.notes = new Map(); this.objects = new Map(); this.registered = new Map(); this.calls = []; this.seq = 0; }
   async rpc(name, args) {
     this.calls.push(name);
+    if (name === "save_folder") {
+      const old = this.folders.get(args.p_id);
+      if (old && args.p_version != null && old.version !== args.p_version) throw Object.assign(new Error("changed elsewhere"), { code: "VERSION_CONFLICT" });
+      const twin = [...this.folders.values()].find((f) => f.id !== args.p_id && !f.deleted && f.spaceId === args.p_space && f.parentId === args.p_parent && f.name.toLowerCase() === args.p_name.toLowerCase());
+      if (twin) return { id: twin.id, version: twin.version, merged: true };
+      const row = { id: args.p_id, spaceId: args.p_space, parentId: args.p_parent, name: args.p_name, version: (old?.version ?? 0) + 1, seq: ++this.seq };
+      this.folders.set(row.id, row); return row;
+    }
+    if (name === "delete_folder") {
+      const old = this.folders.get(args.p_id);
+      if (old && old.version !== args.p_version) throw Object.assign(new Error("changed elsewhere"), { code: "VERSION_CONFLICT" });
+      if (old) { old.deleted = true; old.seq = ++this.seq; }
+      return null;
+    }
     if (name === "upsert_note") {
       const old = this.notes.get(args.p_id);
       if (old && args.p_version != null && old.version !== args.p_version)
         throw Object.assign(new Error("changed elsewhere"), { code: "VERSION_CONFLICT" });
-      const row = { id: args.p_id, spaceId: args.p_space, title: args.p_title, content: args.p_content,
+      const row = { id: args.p_id, spaceId: args.p_space, folderId: args.p_folder ?? null, title: args.p_title, content: args.p_content,
         text: args.p_text, version: (old?.version ?? 0) + 1, deleted: false, seq: ++this.seq };
       this.notes.set(row.id, row);
       return { version: row.version };
@@ -37,6 +53,8 @@ class NotesServer {
         { id: ENG, kind: "custom", name: "Eng", role: "editor" },
         { id: SALES, kind: "custom", name: "Sales", role: "viewer" },
       ],
+      folders: [...this.folders.values()].filter((f) => !f.deleted && f.seq > args.p_since),
+      visibleFolderIds: [...this.folders.values()].filter((f) => !f.deleted).map((f) => f.id),
       people: [], commitments: [], visibleCommitmentIds: [],
       notes: [...this.notes.values()].filter((n) => !n.deleted && n.seq > args.p_since),
       visibleNoteIds: [...this.notes.values()].filter((n) => !n.deleted).map((n) => n.id),
@@ -143,4 +161,117 @@ test("a file over the team storage limit is listed but stays on this Mac", async
   assert.equal(server.calls.includes("upload"), false, "its bytes are never sent");
   assert.equal(server.registered.get(big.id).p_uploaded, false);
   assert.equal(server.registered.get(big.id).p_byte_size, 51 * 1024 * 1024);
+});
+
+
+test("team headings stay local; folder and note placement sync together", async (t) => {
+  const { store, state, server } = await setup(t);
+  await round(store, state, server);
+  const root = state.rootForSpace(ENG);
+  assert.ok(root);
+  const folder = store.createFolder(mutation(store), { name: "Clients", parentId: root });
+  const child = store.createFolder(mutation(store), { name: "Acme", parentId: folder.id });
+  const note = store.createNote(mutation(store), { title: "Kickoff", folderId: child.id });
+  await round(store, state, server);
+  assert.equal(server.folders.has(root), false, "a team heading is not a server folder");
+  assert.equal(server.folders.get(folder.id).parentId, null);
+  assert.equal(server.folders.get(child.id).parentId, folder.id);
+  assert.equal(server.notes.get(note.id).spaceId, ENG);
+  assert.equal(server.notes.get(note.id).folderId, child.id);
+  const calls = server.calls.length;
+  await round(store, state, server);
+  assert.deepEqual(server.calls.slice(calls), ["pull_changes"], "no echo after the pull");
+});
+
+test("web filing reaches the Mac and a stale edit retries with the new location", async (t) => {
+  const { store, state, server } = await setup(t);
+  await round(store, state, server);
+  const note = store.createNote(mutation(store), { title: "Kickoff", content: document("Draft"), folderId: state.rootForSpace(ENG) });
+  await round(store, state, server);
+  const f = await server.rpc("save_folder", { p_id: randomUUID(), p_space: ENG, p_parent: null, p_name: "Web folder" });
+  Object.assign(server.notes.get(note.id), { folderId: f.id, version: 2, seq: ++server.seq });
+  store.updateNote(mutation(store, note.revision), note.id, { content: document("My unsent writing") });
+  await round(store, state, server);
+  assert.equal(store.get(ws(store), "note", note.id).folderId, f.id);
+  assert.equal(store.get(ws(store), "note", note.id).plainText, "My unsent writing");
+  await round(store, state, server);
+  assert.equal(server.notes.get(note.id).folderId, f.id);
+  assert.equal(server.notes.get(note.id).text, "My unsent writing");
+});
+
+test("a move made during a request survives the incoming placement", async (t) => {
+  const { store, state, server } = await setup(t);
+  await round(store, state, server);
+  const note = store.createNote(mutation(store), { title: "Draft" });
+  await round(store, state, server);
+  server.notes.get(note.id).version++; server.notes.get(note.id).seq = ++server.seq;
+  const result = await sync.exchange(server, state, sync.plan(store, state));
+  store.moveNote(mutation(store, note.revision), note.id, state.rootForSpace(ENG));
+  sync.apply(store, state, result);
+  assert.equal(store.get(ws(store), "note", note.id).folderId, state.rootForSpace(ENG));
+  await round(store, state, server);
+  assert.equal(server.notes.get(note.id).spaceId, ENG);
+});
+
+test("concurrent same-name folders merge without losing the Mac's pages", async (t) => {
+  const { store, state, server } = await setup(t);
+  await round(store, state, server);
+  const remote = await server.rpc("save_folder", { p_id: randomUUID(), p_space: ENG, p_parent: null, p_name: "Clients" });
+  const local = store.createFolder(mutation(store), { name: "Clients", parentId: state.rootForSpace(ENG) });
+  const note = store.createNote(mutation(store), { title: "Brief", folderId: local.id });
+  await round(store, state, server);
+  assert.equal(store.get(ws(store), "note", note.id).folderId, remote.id);
+  assert.equal(server.notes.get(note.id).folderId, remote.id);
+  assert.equal(store.folderList(ws(store)).items.filter((f) => f.name === "Clients").length, 1);
+});
+
+test("team sections and daily pages are protected; viewers' folders never become private folders", async (t) => {
+  const { store, state, server } = await setup(t);
+  await round(store, state, server);
+  const root = state.rootForSpace(ENG);
+  assert.throws(() => folders.guard(store, state, "folder", root, null), /managed/);
+  const daily = store.dailyNote(mutation(store));
+  assert.throws(() => folders.guard(store, state, "note", daily.id, root), /Daily notes/);
+  await server.rpc("save_folder", { p_id: randomUUID(), p_space: SALES, p_parent: null, p_name: "Read-only sales" });
+  await round(store, state, server);
+  assert.ok(!store.folderList(ws(store)).items.some((f) => f.name === "Read-only sales"));
+  assert.equal(state.sentFolderIds().length, 0);
+});
+
+test("eight levels inside a team heading fit, but a ninth is rejected", async (t) => {
+  const { store, state, server } = await setup(t);
+  await round(store, state, server);
+  let parent = state.rootForSpace(ENG);
+  for (let n = 1; n <= 8; n++) parent = store.createFolder(mutation(store), { name: `L${n}`, parentId: parent }).id;
+  assert.throws(() => store.createFolder(mutation(store), { name: "L9", parentId: parent }), /nested/);
+});
+
+test("a failed local apply rolls back the cursor so the same pull can retry", async (t) => {
+  const { store, state, server } = await setup(t);
+  await round(store, state, server);
+  const cursor = state.binding().cursor;
+  await server.rpc("save_folder", { p_id: randomUUID(), p_space: ENG, p_parent: null, p_name: "Retry me" });
+  const result = await sync.exchange(server, state, sync.plan(store, state));
+  const save = store._save;
+  store._save = () => { throw new Error("disk full"); };
+  assert.throws(() => sync.apply(store, state, result), /disk full/);
+  store._save = save;
+  assert.equal(state.binding().cursor, cursor);
+  sync.apply(store, state, result);
+  assert.ok(store.folderList(ws(store)).items.some((f) => f.name === "Retry me"));
+});
+
+
+test("deleting a local folder merges a same-name child without losing pages", async (t) => {
+  const { store, state, server } = await setup(t);
+  await round(store, state, server);
+  const root = state.rootForSpace(ENG);
+  const clients = store.createFolder(mutation(store), { name: "Clients", parentId: root });
+  const inside = store.createFolder(mutation(store), { name: "Acme", parentId: clients.id });
+  const outside = store.createFolder(mutation(store), { name: "Acme", parentId: root });
+  const note = store.createNote(mutation(store), { title: "Proposal", folderId: inside.id });
+  await round(store, state, server);
+  store.deleteFolder(mutation(store, clients.revision), clients.id);
+  assert.equal(store.get(ws(store), "note", note.id).folderId, outside.id);
+  assert.equal(store.folderList(ws(store)).items.filter((f) => f.name === "Acme").length, 1);
 });

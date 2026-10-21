@@ -52,11 +52,11 @@ export function TeamSettings({ openWorkspace }) {
   const local = new Map((team.workspaces ?? []).map((w) => [w.serverWorkspaceId, w]));
 
   return (
-    <section aria-labelledby="team-title">
+    <section className="team-settings" aria-labelledby="team-title">
       <h2 id="team-title">Team workspaces</h2>
       <p className="storage-explanation">
-        A team workspace shares the actions you accept, with their quote, and nothing else. Recordings, transcripts
-        and your Personal workspace stay on this Mac.
+        Team workspaces sync notes, attachments and accepted commitments with their quotes.
+        Your Personal workspace, recordings and full transcripts stay on this Mac.
       </p>
       {team.strict && <p className="muted">Strict Local is on, so team workspaces are not syncing.</p>}
       {!connected ? (
@@ -72,7 +72,7 @@ export function TeamSettings({ openWorkspace }) {
       ) : (
         <>
           <div className="setting-row">
-            <span>Signed in as {team.account.email}</span>
+            <span className="team-setting-copy"><span>Connected account</span><span className="muted">{team.account.email}</span></span>
             <button type="button" disabled={busy} onClick={() => act(() => unwrap(api.team.disconnect()))}>Disconnect</button>
           </div>
           {(remote ?? []).length === 0 && (
@@ -82,18 +82,18 @@ export function TeamSettings({ openWorkspace }) {
             const here = local.get(w.id);
             return (
               <div className="setting-row" key={w.id}>
-                <span>
-                  {w.name}
+                <span className="team-setting-copy">
+                  <span>{w.name}</span>
                   <span className="muted">
                     {here
-                      ? here.status === "removed" ? " · you were removed" : ` · synced ${when(here.lastSyncedAt)}${here.lastError ? " · last sync had a problem" : ""}`
-                      : ` · ${w.role}`}
+                      ? here.status === "removed" ? "You were removed" : `Synced ${when(here.lastSyncedAt)}${here.lastError ? " · needs attention" : ""}`
+                      : w.role}
                   </span>
                 </span>
                 {here ? (
-                  <span>
-                    <button type="button" disabled={busy} onClick={() => openWorkspace(here.localId)}>Open</button>{" "}
-                    <button type="button" disabled={busy || team.syncing} onClick={() => act(() => unwrap(api.team.sync()))}>
+                  <span className="setting-actions">
+                    <button type="button" disabled={busy} onClick={() => openWorkspace(here.localId)}>Open</button>
+                    <button type="button" disabled={busy || team.syncing || team.strict} onClick={() => act(() => unwrap(api.team.sync()))}>
                       {team.syncing ? "Syncing…" : "Sync now"}
                     </button>
                   </span>

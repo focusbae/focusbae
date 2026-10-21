@@ -775,3 +775,20 @@ select.note-folder:focus-visible {
   color: var(--danger, #9b3b2e);
   font-size: 11px;
 }
+
+/* Team locations stay visible while the writing list remains the main surface. */
+.team-folder-nav { margin: 0 12px 10px; padding: 6px 0 10px; border-bottom: 1px solid var(--border, #dfe1d7); max-height: 240px; overflow: auto; flex-shrink: 0; }
+.team-folder-nav button { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; min-height: 30px; border: 0; border-radius: 6px; background: transparent; padding: 5px 8px; font-size: 12px; text-align: left; color: inherit; }
+.team-folder-nav button:hover, .team-folder-nav button[aria-current="page"] { background: var(--hover, #798a6d20); }
+.team-folder-nav button[aria-current="page"] { font-weight: 600; }
+.team-folder-nav button > span:last-child { opacity: .65; font-variant-numeric: tabular-nums; }
+.team-folder-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.team-folder-children { padding-left: 14px; }
+/* Sidebar navigation rules must not hide names in the notebook's folder tree. */
+.collapsed nav.team-folder-nav span { display: inline; }
+@media (max-width: 720px) {
+  nav.team-folder-nav span { display: inline; }
+  nav.team-folder-nav button { justify-content: space-between; padding: 5px 8px; }
+}
+.note-home-hint { color: var(--text-muted, #687069); font-size: 10px; white-space: nowrap; }
+.folder-dialog select { width: 100%; padding: 9px 10px; border: 1px solid var(--border, #dfe1d7); border-radius: 7px; background: var(--surface, #fff); color: inherit; }

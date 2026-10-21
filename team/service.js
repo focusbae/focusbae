@@ -145,6 +145,7 @@ class TeamService extends EventEmitter {
       const outcome = await this.catalog.serialize(async () => (sameWorkspace() ? sync.apply(this.catalog.store, state, result) : null));
       this.lastResult = outcome;
       if (outcome?.applied) this.emit("actions-changed");
+      if (outcome?.notesChanged) this.emit("notes-changed");
       return outcome ?? { skipped: "switched" };
     } finally {
       state.close();
@@ -195,6 +196,25 @@ class TeamService extends EventEmitter {
     return this.mapping(actionId);
   }
 
+  // Called inside the existing IPC workspace queue; never re-enters that queue.
+  withFolders(store, fn) {
+    if (!TeamState.exists(store._directory)) return null;
+    const state = new TeamState(store._directory);
+    try {
+      if (state.binding().accountUserId !== this.account.status().userId || state.binding().status === "removed")
+        throw fail("SIGNED_OUT", "Connect the account for this workspace before changing its folders.");
+      require("./folders").prepare(store, state);
+      return fn(state, require("./folders"));
+    } finally { state.close(); }
+  }
+  folderList(store) {
+    return this.withFolders(store, (state, folders) => folders.decorate(store, state, store.folderList({ workspaceId: store.identity.id })))
+      ?? store.folderList({ workspaceId: store.identity.id });
+  }
+  previewMove(store, kind, id, target) {
+    return this.withFolders(store, (state, folders) => folders.guard(store, state, kind, id, target));
+  }
+
   // Which team a note on this Mac belongs to, and the teams it could move to.
   noteVisibility(noteId) {
     return this.catalog.serialize(async () => {
@@ -205,7 +225,7 @@ class TeamService extends EventEmitter {
         store.get({ workspaceId: store.identity.id }, "note", noteId);
         const privateSpace = state.privateSpaceId();
         return {
-          spaceId: state.noteSpace(noteId) ?? privateSpace,
+          spaceId: require("./folders").location(store, state, store._raw("note", noteId)?.folderId).spaceId,
           privateSpaceId: privateSpace,
           options: state.spaces().filter((s) => s.role === "editor").map((s) => ({ id: s.id, kind: s.kind, name: s.name })),
           synced: !!state.noteSent(noteId),

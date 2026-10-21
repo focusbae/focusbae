@@ -333,7 +333,7 @@ function Overview({ page, workspace, refreshKey }) {
   );
 }
 
-function Preferences({ workspace, privacy, run, saved, models, openGuide, openClipboard, openWorkspace }) {
+function Preferences({ workspace, shared, privacy, run, saved, models, openGuide, openClipboard, openWorkspace }) {
   const [name, setName] = useState(workspace.name);
   const [theme, setTheme] = useState(workspace.preferences.theme);
   const [notificationsEnabled, setNotificationsEnabled] = useState(
@@ -463,8 +463,9 @@ function Preferences({ workspace, privacy, run, saved, models, openGuide, openCl
       <section aria-labelledby="local-storage-title">
         <h2 id="local-storage-title">Your work on this Mac</h2>
         <p className="storage-explanation">
-          Notes and transcripts save automatically in this workspace. No account
-          is needed. Cloud sync and automatic cloud backup are not available yet.
+          {shared
+            ? "Notes and attachments shared with your team sync through your connected account. Recordings and full transcripts stay on this Mac."
+            : "Notes and transcripts save automatically in this workspace. No account is needed. Cloud sync and automatic cloud backup are not available yet."}
         </p>
         <p className="storage-explanation muted">
           In Notes, choose Export all notes to keep a separate copy of your
@@ -809,9 +810,9 @@ function App() {
             <strong>
               {privacy.mode === "strict-local"
                 ? "Strict Local"
-                : "Local workspace"}
+                : shared ? "Team workspace" : "Local workspace"}
             </strong>
-            <span>On this Mac</span>
+            <span>{shared ? "On this Mac and your team" : "On this Mac"}</span>
           </div>
         </div>
       </aside>
@@ -839,7 +840,7 @@ function App() {
               ) : (
                 <Check size={15} />
               )}
-              {busy ? "Saving..." : saved ? "Saved on this Mac" : "Local"}
+              {busy ? "Saving..." : saved ? "Saved on this Mac" : shared ? "On Mac" : "Local"}
             </span>
             <button
               className="record-button"
@@ -894,6 +895,7 @@ function App() {
             <Preferences
               key={workspace.id}
               workspace={workspace}
+              shared={shared}
               privacy={privacy}
               run={run}
               saved={saved}
@@ -988,7 +990,7 @@ function App() {
             <HardDrive size={13} />
             {workspace.name}
           </span>
-          <span>Stored locally</span>
+          <span>{shared ? "Team pages sync when connected" : "Stored locally"}</span>
         </footer>
       </div>
       {creating && (

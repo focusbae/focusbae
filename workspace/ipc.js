@@ -598,29 +598,53 @@ function registerWorkspaceIPC({
           .createNote(input.context, input.note),
       );
     },
-    "notes.move": (input) => {
+    "notes.move": async (input, event) => {
       v.object(input, ["context", "id", "folderId"]);
-      return catalog
-        .scoped(input.context.workspaceId)
-        .moveNote(input.context, input.id, input.folderId ?? null);
+      const store = catalog.scoped(input.context.workspaceId);
+      const move = team?.previewMove(store, "note", input.id, input.folderId ?? null);
+      if (move) {
+        const answer = await dialog.showMessageBox(getWindow(), {
+          type: "question", message: `Move “${move.name}” to ${move.home}?`,
+          detail: move.private ? "The home team will lose access. Additional team shares and guest invitations remain; review them on the web."
+            : `Members of ${move.home} will be able to read this page. Existing shares and guest invitations remain.`,
+          buttons: ["Cancel", "Move page"], defaultId: 0, cancelId: 0,
+        });
+        check(trusted(event, getWindow()), "PERMISSION_DENIED", "Workspace window closed");
+        if (answer.response !== 1) return publicNote(store.get({ workspaceId: input.context.workspaceId }, "note", input.id));
+      }
+      return store.moveNote(input.context, input.id, input.folderId ?? null);
     },
     "folders.list": (input) => {
       v.object(input, ["workspaceId"]);
-      return catalog.scoped(input.workspaceId).folderList({ workspaceId: input.workspaceId });
+      const store = catalog.scoped(input.workspaceId);
+      return team ? team.folderList(store) : store.folderList({ workspaceId: input.workspaceId });
     },
     "folders.create": (input) => {
       v.object(input, ["context", "folder"]);
-      return catalog.scoped(input.context.workspaceId).createFolder(input.context, input.folder);
+      const store = catalog.scoped(input.context.workspaceId);
+      team?.previewMove(store, "folder", null, input.folder.parentId ?? null);
+      return store.createFolder(input.context, input.folder);
     },
-    "folders.update": (input) => {
+    "folders.update": async (input, event) => {
       v.object(input, ["context", "id", "changes"]);
-      return catalog
-        .scoped(input.context.workspaceId)
-        .updateFolder(input.context, input.id, input.changes);
+      const store = catalog.scoped(input.context.workspaceId);
+      const old = store.get({ workspaceId: input.context.workspaceId }, "folder", input.id);
+      const move = team?.previewMove(store, "folder", input.id, input.changes.parentId === undefined ? old.parentId : input.changes.parentId);
+      if (move) {
+        const answer = await dialog.showMessageBox(getWindow(), { type: "question", message: `Move “${old.name}” to ${move.home}?`,
+          detail: `Pages in this folder and its subfolders will belong to ${move.home}. Pages by authors outside that team stay in the old team. Existing shares and guest invitations remain.`,
+          buttons: ["Cancel", "Move folder"], defaultId: 0, cancelId: 0 });
+        check(trusted(event, getWindow()), "PERMISSION_DENIED", "Workspace window closed");
+        if (answer.response !== 1) return old;
+      }
+      return store.updateFolder(input.context, input.id, input.changes);
     },
     "folders.delete": (input) => {
       v.object(input, ["context", "id"]);
-      return catalog.scoped(input.context.workspaceId).deleteFolder(input.context, input.id);
+      const store = catalog.scoped(input.context.workspaceId);
+      const old = store.get({ workspaceId: input.context.workspaceId }, "folder", input.id);
+      team?.previewMove(store, "folder", input.id, old.parentId);
+      return store.deleteFolder(input.context, input.id);
     },
     "notes.daily": (input) => {
       v.object(input, ["context"]);
@@ -1171,11 +1195,14 @@ function registerWorkspaceIPC({
     if (team && win && !win.isDestroyed()) win.webContents.send("workspace:team-event", team.snapshot());
   };
   const teamActions = () => emit("actions.changed");
+  const teamNotes = () => emit("notes.changed");
   team?.on("change", teamEvent);
   team?.on("actions-changed", teamActions);
+  team?.on("notes-changed", teamNotes);
   return () => {
     team?.removeListener("change", teamEvent);
     team?.removeListener("actions-changed", teamActions);
+    team?.removeListener("notes-changed", teamNotes);
     attachments.close();
     for (const name of CHANNELS) ipcMain.removeHandler(`workspace:${name}`);
     privacy.policy.removeListener("change", emit);

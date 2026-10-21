@@ -39,7 +39,6 @@ import {
   Wand,
   Paperclip,
 } from "lucide-react";
-import { NoteVisibility } from "./note-visibility";
 import { SaveQueue } from "./save-queue.mjs";
 import { Wikilink, completeLink } from "./wikilink.mjs";
 import { NoteAttachment, uploadAttachment } from "./note-attachment.mjs";
@@ -146,54 +145,45 @@ function LinkDialog({ editor, close }) {
   );
 }
 
-function FolderDialog({ mode, folder, parentPath, close, submit }) {
+function FolderDialog({ mode, folder, folders = [], parentPath, close, submit }) {
   const ref = useRef(null);
   const [name, setName] = useState(mode === "rename" ? folder.name : "");
-  useEffect(() => {
-    ref.current.showModal();
-  }, []);
-  const heading = mode === "rename" ? "Rename folder" : "New folder";
-  return (
-    <dialog ref={ref} className="folder-dialog" aria-label={heading} onCancel={close}>
-      <form
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (!name.trim()) return;
-          submit(name.trim());
-          close();
-        }}
-      >
-        <div className="dialog-heading">
-          <h2>{heading}</h2>
-          <Tool label={`Close ${heading.toLowerCase()} dialog`} icon={X} onClick={close} />
-        </div>
+  const [parent, setParent] = useState(folder?.parentId ?? "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  useEffect(() => { ref.current.showModal(); }, []);
+  const heading = mode === "move" ? "Move folder" : mode === "rename" ? "Rename folder" : "New folder";
+  const excluded = new Set(folder ? [folder.id] : []);
+  for (let size = -1; excluded.size !== size;) {
+    size = excluded.size;
+    for (const f of folders) if (excluded.has(f.parentId)) excluded.add(f.id);
+  }
+  return <dialog ref={ref} className="folder-dialog" aria-label={heading} onCancel={close}>
+    <form onSubmit={async (event) => {
+      event.preventDefault(); setSaving(true); setError(null);
+      try { await submit(mode === "move" ? parent || null : name.trim()); close(); }
+      catch (failure) { setError(failure.message); }
+      finally { setSaving(false); }
+    }}>
+      <div className="dialog-heading"><h2>{heading}</h2><Tool label="Close folder dialog" icon={X} onClick={close} /></div>
+      {mode === "move" ? <>
+        <label htmlFor="folder-parent">Move “{folder.name}” into</label>
+        <select id="folder-parent" value={parent} onChange={(e) => setParent(e.target.value)}>
+          <option value="">{folders.some((f) => f.teamRoot) ? "My notes" : "Top level"}</option>
+          {folders.filter((f) => !excluded.has(f.id) && f.writable !== false).map((f) => <option key={f.id} value={f.id}>{f.path}</option>)}
+        </select>
+        <p className="dialog-note">Moving between teams changes the home audience. Additional shares and guest access remain.</p>
+      </> : <>
         <label htmlFor="folder-name">Name</label>
-        <input
-          id="folder-name"
-          autoFocus
-          maxLength={200}
-          value={name}
-          onChange={(event) => setName(event.target.value)}
-          placeholder="For example, Clients"
-        />
-        {mode === "create" && (
-          <p className="dialog-note">
-            {parentPath ? `Inside ${parentPath}` : "At the top level"}
-          </p>
-        )}
-        <div className="dialog-actions">
-          <button type="button" onClick={close}>
-            Cancel
-          </button>
-          <button type="submit" className="primary" disabled={!name.trim()}>
-            {mode === "rename" ? "Rename" : "Create folder"}
-          </button>
-        </div>
-      </form>
-    </dialog>
-  );
+        <input id="folder-name" autoFocus maxLength={200} value={name} onChange={(e) => setName(e.target.value)} placeholder="For example, Clients" />
+        {mode === "create" && <p className="dialog-note">{parentPath ? `Inside ${parentPath}` : "At the top level"}</p>}
+      </>}
+      {error && <p role="alert" className="dialog-note danger">{error}</p>}
+      <div className="dialog-actions"><button type="button" onClick={close}>Cancel</button><button type="submit" className="primary" disabled={saving || (mode !== "move" && !name.trim())}>{saving ? "Saving…" : mode === "create" ? "Create folder" : heading}</button></div>
+    </form>
+  </dialog>;
 }
-function FolderMenu({ folder, busy, create, rename, remove }) {
+function FolderMenu({ folder, busy, create, rename, move, remove }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   useEffect(() => {
@@ -228,12 +218,11 @@ function FolderMenu({ folder, busy, create, rename, remove }) {
           <button type="button" role="menuitem" onClick={pick(create)}>
             New folder inside
           </button>
-          <button type="button" role="menuitem" onClick={pick(rename)}>
-            Rename
-          </button>
-          <button type="button" role="menuitem" className="danger" onClick={pick(remove)}>
-            Remove folder
-          </button>
+          {!folder.teamRoot && <>
+            <button type="button" role="menuitem" onClick={pick(rename)}>Rename</button>
+            <button type="button" role="menuitem" onClick={pick(move)}>Move folder…</button>
+            <button type="button" role="menuitem" className="danger" onClick={pick(remove)}>Remove folder</button>
+          </>}
         </span>
       )}
     </span>
@@ -756,19 +745,20 @@ function NoteEditor({
               <select
               className="note-folder"
               aria-label="Folder for this page"
+              title={teamWorkspaceId ? "Location sets the home team. Additional shares and guest access are managed on the web." : "Move this page into a folder"}
               value={note.folderId ?? ""}
               onChange={(event) => moveNote(note, event.target.value || null)}
             >
-              <option value="">Unfiled</option>
+              <option value="">{teamWorkspaceId ? "My notes" : "Unfiled"}</option>
               {folders.map((folder) => (
-                <option key={folder.id} value={folder.id}>
+                <option key={folder.id} value={folder.id} disabled={folder.writable === false}>
                   {folder.path}
                 </option>
               ))}
             </select>
             </>
           )}
-          {!note.deletedAt && teamWorkspaceId && <NoteVisibility workspaceId={teamWorkspaceId} noteId={note.id} />}
+          {!note.deletedAt && teamWorkspaceId && <span className="note-home-hint" title="Location sets the home team. Additional shares and guest access remain until removed on the web.">Home location</span>}
         </div>
         <div className="note-actions">
           {!note.deletedAt && (
@@ -1335,7 +1325,7 @@ export function Notebook({
       setFolderId(folder.id);
       setOffset(0);
       refresh();
-    }).catch(() => {});
+    });
   const renameFolder = (name) =>
     act(async () => {
       await unwrap(
@@ -1346,7 +1336,11 @@ export function Notebook({
         }),
       );
       refresh();
-    }).catch(() => {});
+    });
+  const moveFolder = (parentId) => act(async () => {
+    await unwrap(api.folders.update({ context: context(workspace.id, selectedFolder.revision), id: selectedFolder.id, changes: { parentId } }));
+    refresh();
+  });
   const removeFolder = () => {
     act(async () => {
       const result = await unwrap(
@@ -1555,6 +1549,7 @@ export function Notebook({
                     rename={() =>
                       setFolderDialog({ mode: "rename", folder: selectedFolder })
                     }
+                    move={() => setFolderDialog({ mode: "move", folder: selectedFolder })}
                     remove={removeFolder}
                   />
                 ) : (
@@ -1573,6 +1568,16 @@ export function Notebook({
                 : `${listing.mode === "lexical-fallback" ? "Words only · " : ""}${listing.total}${query && listing.total === 100 ? "+" : ""}`}
             </span>
           </div>
+          {!query && shared && folders.items.length > 0 && <nav className="team-folder-nav" aria-label="Team folders">
+            <button type="button" aria-current={folderId === "unfiled" ? "page" : undefined} onClick={() => { setFolderId("unfiled"); setView("all"); setOffset(0); }}>◇ My notes <span>{folders.unfiled}</span></button>
+            {(() => {
+              const tree = (parentId, depth = 0) => depth > 8 ? null : folders.items.filter((f) => (f.parentId ?? null) === parentId).map((f) => {
+                const button = <button type="button" title={f.path} aria-current={folderId === f.id ? "page" : undefined} onClick={() => { setFolderId(f.id); setView("all"); setOffset(0); }}><span className="team-folder-name">{f.teamRoot ? "◫ " : "▱ "}{f.name}</span><span>{f.notes}</span></button>;
+                return <div key={f.id}>{button}<div className="team-folder-children">{tree(f.id, depth + 1)}</div></div>;
+              });
+              return tree(null);
+            })()}
+          </nav>}
           <div className="note-rows">
             {loading ? (
               <p className="library-empty" role="status">
@@ -1722,9 +1727,10 @@ export function Notebook({
           <FolderDialog
             mode={folderDialog.mode}
             folder={folderDialog.folder}
+            folders={folders.items}
             parentPath={folderDialog.mode === "create" ? selectedFolder?.path : null}
             close={() => setFolderDialog(null)}
-            submit={folderDialog.mode === "rename" ? renameFolder : createFolder}
+            submit={folderDialog.mode === "move" ? moveFolder : folderDialog.mode === "rename" ? renameFolder : createFolder}
           />
         )}
         {notice && (

@@ -180,6 +180,21 @@ class TeamAccount extends EventEmitter {
     if (!response.ok) throw fail("REMOTE", `Upload failed (${response.status})`);
   }
 
+  // Reads a file from the team's private storage; null when it is not there (yet).
+  async download(bucket, objectPath) {
+    const ticket = this.policy.ticket();
+    this.policy.assert("team", ticket);
+    const token = await this.#accessToken(ticket);
+    this.policy.assert("team", ticket);
+    const response = await this.fetch(new URL(`/storage/v1/object/authenticated/${bucket}/${objectPath}`, this.session.supabaseUrl), {
+      headers: { apikey: this.session.supabaseAnonKey, authorization: `Bearer ${token}` },
+    });
+    if ([400, 404].includes(response.status)) return null;
+    if (response.status === 403) throw fail("FORBIDDEN", "Download not allowed");
+    if (!response.ok) throw fail("REMOTE", `Download failed (${response.status})`);
+    return Buffer.from(await response.arrayBuffer());
+  }
+
   async select(path) {
     const ticket = this.policy.ticket();
     this.policy.assert("team", ticket);

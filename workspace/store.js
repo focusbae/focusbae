@@ -199,9 +199,16 @@ class WorkspaceStore {
     return this._mutate(ctx, `${kind}.create`, input, () => this._save(kind, this._new(normalize(input))));
   }
 
+  // A teammate's page synced to this Mac: readable, linkable and pinnable here, but its
+  // words, place and life belong to its author. Only team sync writes these copies.
+  _ownNote(note, onlyPinning = false) {
+    check(!note?.team || onlyPinning, 'READ_ONLY', 'This page belongs to a teammate. Only they can change it.');
+  }
+
   _update(ctx, kind, id, input, normalize) {
     return this._mutate(ctx, `${kind}.update`, { id, input }, () => {
       const old = this._live(kind, id); this._expected(ctx, old);
+      if (kind === 'note' && old.team) this._ownNote(old, Object.keys(input).every((key) => key === 'pinned'));
       return this._save(kind, this._next(old, normalize(input, old)));
     });
   }
@@ -320,6 +327,7 @@ class WorkspaceStore {
     return this._mutate(ctx, `${kind}.${deleted ? 'delete' : 'restore'}`, { id }, () => {
       const old = this._raw(kind, id); check(old, 'NOT_FOUND', 'Record does not exist'); this._expected(ctx, old);
       check(!old.metadata?.purgedAt, 'NOT_FOUND', 'Note was permanently deleted');
+      if (kind === 'note') this._ownNote(old);
       check(!!old.deletedAt !== deleted, 'INVALID_TRANSITION', 'Record already has this deletion state');
       if (!deleted && ['transcript', 'speaker', 'link'].includes(kind)) this._live('recording', old.recordingId);
       if (!deleted && kind === 'link') this._live('note', old.noteId);
@@ -334,23 +342,31 @@ class WorkspaceStore {
     const record = this._mutate(ctx, 'note.purge', { id }, () => {
       const old = this._raw('note', id);
       check(old && old.deletedAt && !old.metadata?.purgedAt, 'INVALID_TRANSITION', 'Only notes in Trash can be permanently deleted');
+      this._ownNote(old);
       this._expected(ctx, old);
-      const now = new Date().toISOString();
-      for (const row of this._db.prepare('SELECT id FROM attachments WHERE note_id = ? AND deleted_at IS NULL').all(id)) {
-        const attachment = this._raw('attachment', row.id);
-        this._save('attachment', this._next(attachment, { deletedAt: now }));
-        this._db.prepare('INSERT INTO file_journal VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-          .run(randomUUID(), ctx.workspaceId, 'delete', attachment.relativePath, null, attachment.contentHash, attachment.byteSize, now);
-      }
-      const saved = this._save('note', this._next(old, {
-        ...require('./content').documentContent(require('./content').EMPTY_DOCUMENT), title: '', metadata: { purgedAt: now },
-      }));
-      this._db.prepare("DELETE FROM source_revisions WHERE entity_kind = 'note' AND entity_id = ?").run(id);
-      this._db.prepare("DELETE FROM mutation_requests WHERE json_extract(result_json, '$.id') = ?").run(id);
-      return saved;
+      return this._purge(old);
     });
     require('./attachments').reconcile(this);
     return record;
+  }
+
+  // Erases a note's words and files, keeping only a tombstone. Callers reconcile the
+  // attachment files once their transaction commits.
+  _purge(old) {
+    const now = new Date().toISOString();
+    for (const row of this._db.prepare('SELECT id FROM attachments WHERE note_id = ? AND deleted_at IS NULL').all(old.id)) {
+      const attachment = this._raw('attachment', row.id);
+      this._save('attachment', this._next(attachment, { deletedAt: now }));
+      this._db.prepare('INSERT INTO file_journal VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(randomUUID(), old.workspaceId, 'delete', attachment.relativePath, null, attachment.contentHash, attachment.byteSize, now);
+    }
+    const saved = this._save('note', this._next(old, {
+      ...require('./content').documentContent(require('./content').EMPTY_DOCUMENT), title: '', metadata: { purgedAt: now },
+      deletedAt: old.deletedAt ?? now,
+    }));
+    this._db.prepare("DELETE FROM source_revisions WHERE entity_kind = 'note' AND entity_id = ?").run(old.id);
+    this._db.prepare("DELETE FROM mutation_requests WHERE json_extract(result_json, '$.id') = ?").run(old.id);
+    return saved;
   }
 
   enqueueJob(ctx, input) {

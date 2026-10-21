@@ -884,4 +884,5 @@ select.note-folder:focus-visible {
   nav.library-locations .library-quick-views button:not(:first-child) { justify-content: center; }
 }
 .note-home-hint { color: var(--text-muted, #687069); font-size: 10px; white-space: nowrap; }
+.note-owner { display: inline-flex; align-items: center; gap: 5px; }
 .folder-dialog select { width: 100%; padding: 9px 10px; border: 1px solid var(--border, #dfe1d7); border-radius: 7px; background: var(--surface, #fff); color: inherit; }

@@ -23,6 +23,10 @@ global.workspaceProbe.seedTeam = () => {
       const folder = store.createFolder(ctx(), { name: 'Client work', parentId: root });
       const note = store.createNote(ctx(), { title: 'Acme kickoff', folderId: folder.id,
         content: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Priya will share the revised plan on Thursday.' }] }] } });
+      // A teammate's page, as team sync writes it.
+      store._mirrorNote({ id: randomUUID(), title: 'Pricing decision', folderId: folder.id,
+        team: { authorName: 'Priya', spaceName: 'Engineering', access: 'view' },
+        content: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'We keep the annual discount at 20%.' }] }] } });
       store.createNote(ctx(), { title: 'Private thinking', content: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Only in My notes.' }] }] } });
       state.close();
       return { workspaceId, noteId: note.id, root, folder: folder.id };

@@ -103,8 +103,18 @@ preserving writing done locally during the network request. Same-name folder
 creation resolves to the server's canonical id and moves local pages into it.
 The local store and sync cursor commit in a coordinated apply; a failed local
 write retries the pull. Team headings are local only, and Personal workspaces
-never gain team state. Only folders in writable teams appear on the Mac today;
-viewer-only team folders remain available on the web.
+never gain team state. Every team the person is in has a heading, including teams
+they can only read; pages shared from a team they are not in gather under a local
+"Shared with you" heading.
+
+Teammates' pages arrive on the Mac as read-only copies in the local store, marked with
+their author and team, so search, `[[` links, backlinks and the graph include them as
+they would any page the person can see. Only team sync writes them; the store refuses
+edits, moves, Trash and new files on them (pinning stays the reader's choice), and they
+are never sent back. Their files download after the pull, within the same 120 MB round
+budget, and the page shows without a file until it arrives. A page the person can no
+longer see, and every copy on removal from the workspace, is erased (words and files),
+not moved to Trash. A page this Mac cannot read is reported without stopping the rest.
 Until co-editing, only the author changes a note's content; teammates read and comment
 on the web, and the author or an admin can share it with another team or a guest. Notes
 use the same version guard as commitments. The web renders the stored TipTap JSON with
@@ -121,6 +131,6 @@ round holds at most 120 MB of uploads in memory; the rest go in later rounds.
 
 - Sync only runs for the open workspace; background sync of other team workspaces.
 - Team spaces other than "everyone" from the Mac (choose the team when accepting).
-- Teammates' notes on the Mac (they are pulled into `remote_notes`; shown on the web today).
+- The person's own pages written on the web do not come to the Mac yet.
 - Applying another Mac's edits to the same authored page. Snapshot conflicts remain guarded until co-editing.
 - Co-editing with Yjs (TEAM_PLAN weeks 7–8), which replaces author-only snapshots.

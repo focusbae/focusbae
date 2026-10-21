@@ -32,9 +32,36 @@ function publicNote(note) {
     pinned: note.metadata?.pinned === true,
     importWarnings: note.metadata?.importWarnings ?? [],
     originalAttachmentId: note.metadata?.originalAttachmentId ?? null,
+    team: note.team ? { readOnly: true, authorName: note.team.authorName ?? null, spaceName: note.team.spaceName ?? null } : null,
   };
 }
 const methods = {
+  // A page as the team service holds it. Team sync is the only caller: `team` marks a
+  // teammate's page (read-only here); null is the person's own page written elsewhere,
+  // which becomes an ordinary page on this Mac. Files not downloaded yet are left out
+  // of the document and appear once they arrive. Returns whether every file was here.
+  _mirrorNote({ id, title, content, folderId, team }) {
+    const { attachmentIds, withoutAttachments } = require("./content");
+    const wanted = attachmentIds(content);
+    const present = new Set(wanted.filter((attachment) => {
+      const record = this._raw("attachment", attachment);
+      return record && !record.deletedAt && record.noteId === id;
+    }));
+    const old = this._raw("note", id);
+    const data = require("./domain").note({
+      kind: "note", title, folderId, metadata: old?.metadata?.purgedAt ? {} : old?.metadata ?? {},
+      content: present.size === wanted.length ? content : withoutAttachments(content, present),
+    }, null, this._timezone());
+    this._save("note", old ? this._next(old, { ...data, team, deletedAt: null }) : { ...this._new(data), id, team });
+    return present.size === wanted.length;
+  },
+
+  // A teammate's page this person can no longer see leaves no readable trace here.
+  _dropMirror(id) {
+    const old = this._raw("note", id);
+    if (old?.team && !old.metadata?.purgedAt) this._purge(old);
+  },
+
   dailyNote(ctx, now = new Date()) {
     const timezone = this._timezone();
     const day = calendarDate(timezone, now);

@@ -136,7 +136,8 @@ function planNotes(store, state) {
   if (!privateSpace) return { notes, deletions, uploads, noteSnapshots };
   const live = new Set();
   for (const note of listAll(store, workspaceId, "note")) {
-    if (note.deletedAt || note.metadata?.purgedAt) continue;
+    // Teammates' pages are copies of theirs; only their author sends them.
+    if (note.team || note.deletedAt || note.metadata?.purgedAt) continue;
     live.add(note.id);
     const where = note.kind === "daily" ? { spaceId: privateSpace, folderId: null } : folders.location(store, state, note.folderId);
     if (!state.spaces().some((s) => s.id === where.spaceId && s.role === "editor")) continue;
@@ -275,13 +276,103 @@ async function exchange(account, state, work) {
     }
   }
   const pushed = { sent, withdrawn, notesSent, notesDeleted, uploaded, errors, foldersSent, folderAliases, folderSnapshots: work.folderSnapshots, noteSnapshots: work.noteSnapshots };
+  let pull;
   try {
-    const pull = await account.rpc("pull_changes", { p_workspace: ws, p_since: folderAliases.length ? 0 : binding.cursor });
-    return { ...pushed, pull };
+    pull = await account.rpc("pull_changes", { p_workspace: ws, p_since: folderAliases.length ? 0 : binding.cursor });
   } catch (error) {
     if (error.code === "FORBIDDEN") return { ...pushed, removed: true };
     throw error;
   }
+  const downloads = await downloadFiles(account, state, pull, errors);
+  return { ...pushed, pull, downloads };
+}
+
+// Teammates' pages as the team now holds them: what was stored before plus this pull.
+function teammatePages(state, pull) {
+  const me = state.binding().accountUserId;
+  const visible = new Set(pull.visibleNoteIds ?? []);
+  const pages = new Map(state.remoteNotes().map((n) => [n.id, n]));
+  for (const n of pull.notes ?? []) pages.set(n.id, n);
+  return [...pages.values()].filter((n) => visible.has(n.id) && n.authorId !== me);
+}
+
+// The files of teammates' pages that are not on this Mac yet, within this round's
+// memory budget. A file that fails to arrive is asked for again next round.
+async function downloadFiles(account, state, pull, errors) {
+  const wanted = new Map();
+  for (const page of teammatePages(state, pull)) {
+    let ids = [];
+    try { ids = require("../workspace/content").attachmentIds(page.content); } catch { continue; }
+    for (const id of ids) if (!state.attachmentMirrored(id)) wanted.set(`${page.id}/${id}`, { noteId: page.id, id });
+  }
+  const downloads = [];
+  let budget = UPLOAD_BUDGET_BYTES;
+  const noteIds = [...new Set([...wanted.values()].map((w) => w.noteId))];
+  for (let i = 0; i < noteIds.length; i += 50) {
+    try {
+      const rows = await account.select(`note_attachments?select=note_id,attachment_id,file_name,mime_type,byte_size,uploaded&uploaded=eq.true&note_id=in.(${noteIds.slice(i, i + 50).join(",")})`);
+      for (const row of rows) {
+        if (!wanted.has(`${row.note_id}/${row.attachment_id}`) || row.byte_size > budget) continue;
+        const bytes = await account.download("note-attachments", `${state.binding().serverWorkspaceId}/${row.note_id}/${row.attachment_id}`);
+        if (!bytes) continue;
+        budget -= bytes.length;
+        downloads.push({ noteId: row.note_id, id: row.attachment_id, displayName: row.file_name, mediaType: row.mime_type, bytes });
+      }
+    } catch (error) {
+      if (error.code === "POLICY_DENIED" || error.code === "SIGNED_OUT") throw error;
+      errors.push(error.message);
+    }
+  }
+  return downloads;
+}
+
+// Teammates' pages become read-only copies on this Mac, under their team's heading and
+// folder, so search, links and the graph include them. A page this person can no
+// longer see is erased here, not moved to Trash.
+function mirrorPages(store, state, result) {
+  const people = new Map(state.people().map((p) => [p.id, p.name]));
+  const spaces = new Map(state.spaces().map((s) => [s.id, s]));
+  const files = new Map();
+  for (const d of result.downloads ?? []) files.set(d.noteId, [...(files.get(d.noteId) ?? []), d]);
+  const live = new Set();
+  let changed = false, dropped = false;
+  for (const remote of teammatePages(state, result.pull)) {
+    const local = store._raw("note", remote.id);
+    if (local && !local.team) continue; // never overwrite a page of this person's own
+    live.add(remote.id);
+    const team = { authorPersonId: remote.authorPersonId ?? null, authorName: people.get(remote.authorPersonId) ?? null,
+      spaceId: remote.spaceId, spaceName: spaces.get(remote.spaceId)?.name ?? null, access: remote.access ?? "view" };
+    const seen = state.mirrored(remote.id);
+    const arrived = files.get(remote.id) ?? [];
+    if (seen?.version === remote.version && local && !local.metadata?.purgedAt && !arrived.length
+      && local.team.authorName === team.authorName && local.team.spaceName === team.spaceName) continue;
+    const filed = remote.folderId && state.folderSent(remote.folderId) && store._raw("folder", remote.folderId)?.deletedAt === null;
+    const page = { id: remote.id, title: remote.title ?? "", content: remote.content, team,
+      folderId: filed ? remote.folderId : state.rootForSpace(remote.spaceId) ?? folders.sharedRoot(store, state) };
+    // One page this Mac cannot read (say, from a newer editor) must not stop the rest:
+    // each page is its own savepoint, and a refused one is reported and retried.
+    try {
+      store._db.transaction(() => {
+        let complete = store._mirrorNote(page);
+        if (arrived.length) {
+          for (const file of arrived) store._mirrorAttachment(remote.id, file, file.bytes);
+          complete = store._mirrorNote(page);
+        }
+        for (const file of arrived) state.markAttachmentMirrored(file.id, remote.id);
+        state.markMirrored(remote.id, remote.version, complete);
+      })();
+      changed = true;
+    } catch (error) {
+      if (!error.code || error.code.startsWith("SQLITE")) throw error;
+      result.errors.push(`"${page.title || "Untitled page"}" could not be shown on this Mac: ${error.message}`);
+    }
+  }
+  for (const id of state.mirroredIds()) if (!live.has(id)) {
+    store._dropMirror(id);
+    state.forgetMirrored(id);
+    changed = dropped = true;
+  }
+  return { changed, dropped };
 }
 
 // Phase 3, under the workspace lock again: record what was sent, store the pull, and
@@ -293,8 +384,9 @@ function apply(store, state, result) {
   for (const id of result.notesDeleted ?? []) state.forgetNoteSent(id);
   for (const u of result.uploaded ?? []) state.markAttachmentSent(u.id, u.noteId, u.contentHash, !!u.bytes);
   if (result.removed) {
+    for (const id of state.mirroredIds()) store._dropMirror(id);
     state.markRemoved();
-    return { removed: true, applied: 0 };
+    return { removed: true, applied: 0, dropped: true };
   }
   // Space membership is needed before creating local team headings.
   state.applyPull(result.pull);
@@ -325,6 +417,7 @@ function apply(store, state, result) {
       state.markNoteSent(remote.id, agrees ? hashOf({ ...where, title: current.title, content: current.content, text: current.plainText }) : "", remote.version);
     }
   }
+  const mirrors = mirrorPages(store, state, result);
   const workspaceId = store.identity.id;
   let applied = 0;
   for (const remote of result.pull.commitments) {
@@ -352,10 +445,15 @@ function apply(store, state, result) {
     state.markSent(remote.id, inStep ? hashOf(payload) : "", remote.version);
   }
   if (result.errors.length) state.recordError(result.errors[0]);
-  return { removed: false, applied, notesChanged: notesChanged || foldersChanged };
+  return { removed: false, applied, notesChanged: notesChanged || foldersChanged || mirrors.changed, dropped: mirrors.dropped };
 }
 
 // Cursor and mappings commit only after all local changes succeed. A failed local
-// write therefore retries the same pull instead of skipping it forever.
-const applyAtomically = (store, state, result) => state.db.transaction(() => store._db.transaction(() => apply(store, state, result))())();
+// write therefore retries the same pull instead of skipping it forever. Files of
+// erased pages are removed from disk once that commit has happened.
+function applyAtomically(store, state, result) {
+  const outcome = state.db.transaction(() => store._db.transaction(() => apply(store, state, result))())();
+  if (outcome.dropped) require("../workspace/attachments").reconcile(store);
+  return outcome;
+}
 module.exports = { plan, exchange, apply: applyAtomically, payloadFor, sharedPeople, hashOf };

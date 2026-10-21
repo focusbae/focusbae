@@ -11,6 +11,8 @@ const sync = require("../../team/sync");
 const PRIVATE = "33333333-3333-4333-8333-333333333333";
 const ENG = "44444444-4444-4444-8444-444444444444";
 const SALES = "55555555-5555-4555-8555-555555555555";
+const ALICE = "66666666-6666-4666-8666-666666666666";
+const WS = "11111111-1111-4111-8111-111111111111";
 
 // Enough of the team service for notes: versions, deletions, uploads and the pull.
 class NotesServer {
@@ -35,7 +37,7 @@ class NotesServer {
       const old = this.notes.get(args.p_id);
       if (old && args.p_version != null && old.version !== args.p_version)
         throw Object.assign(new Error("changed elsewhere"), { code: "VERSION_CONFLICT" });
-      const row = { id: args.p_id, spaceId: args.p_space, folderId: args.p_folder ?? null, title: args.p_title, content: args.p_content,
+      const row = { id: args.p_id, authorId: "u1", spaceId: args.p_space, folderId: args.p_folder ?? null, title: args.p_title, content: args.p_content,
         text: args.p_text, version: (old?.version ?? 0) + 1, deleted: false, seq: ++this.seq };
       this.notes.set(row.id, row);
       return { version: row.version };
@@ -55,7 +57,7 @@ class NotesServer {
       ],
       folders: [...this.folders.values()].filter((f) => !f.deleted && f.seq > args.p_since),
       visibleFolderIds: [...this.folders.values()].filter((f) => !f.deleted).map((f) => f.id),
-      people: [], commitments: [], visibleCommitmentIds: [],
+      people: [{ id: ALICE, name: "Alice", email: "alice@acme.com", isMember: true }], commitments: [], visibleCommitmentIds: [],
       notes: [...this.notes.values()].filter((n) => !n.deleted && n.seq > args.p_since),
       visibleNoteIds: [...this.notes.values()].filter((n) => !n.deleted).map((n) => n.id),
     };
@@ -64,6 +66,29 @@ class NotesServer {
   async upload(bucket, path, bytes, contentType) {
     this.calls.push("upload");
     this.objects.set(path, { bytes, contentType });
+  }
+  async select(path) {
+    this.calls.push("select");
+    const ids = new Set(/note_id=in\.\(([^)]*)\)/.exec(path)[1].split(","));
+    return [...this.registered.values()].filter((r) => ids.has(r.p_note) && r.p_uploaded).map((r) => ({
+      note_id: r.p_note, attachment_id: r.p_attachment, file_name: r.p_file_name, mime_type: r.p_mime_type, byte_size: r.p_byte_size, uploaded: true,
+    }));
+  }
+  async download(bucket, path) {
+    this.calls.push("download");
+    return this.objects.get(path)?.bytes ?? null;
+  }
+  // A page Alice writes on the web: what the server holds, as another author.
+  teammate(fields) {
+    const old = this.notes.get(fields.id);
+    const row = { authorId: "alice", authorPersonId: ALICE, spaceId: ENG, folderId: null, title: "Alice's spec",
+      content: document("Alice wrote this"), ...old, ...fields, version: (old?.version ?? 0) + 1, deleted: false, seq: ++this.seq };
+    this.notes.set(row.id, row);
+    return row;
+  }
+  teammateFile(noteId, id, bytes) {
+    this.objects.set(`${WS}/${noteId}/${id}`, { bytes, contentType: "image/png" });
+    this.registered.set(id, { p_note: noteId, p_attachment: id, p_file_name: "board.png", p_mime_type: "image/png", p_byte_size: bytes.length, p_uploaded: true });
   }
 }
 
@@ -232,10 +257,14 @@ test("team sections and daily pages are protected; viewers' folders never become
   assert.throws(() => folders.guard(store, state, "folder", root, null), /managed/);
   const daily = store.dailyNote(mutation(store));
   assert.throws(() => folders.guard(store, state, "note", daily.id, root), /Daily notes/);
-  await server.rpc("save_folder", { p_id: randomUUID(), p_space: SALES, p_parent: null, p_name: "Read-only sales" });
+  const viewed = await server.rpc("save_folder", { p_id: randomUUID(), p_space: SALES, p_parent: null, p_name: "Read-only sales" });
   await round(store, state, server);
-  assert.ok(!store.folderList(ws(store)).items.some((f) => f.name === "Read-only sales"));
-  assert.equal(state.sentFolderIds().length, 0);
+  const shown = store.folderList(ws(store)).items.find((f) => f.name === "Read-only sales");
+  assert.equal(shown.parentId, state.rootForSpace(SALES), "a team the person only reads still shows its folders, under its heading");
+  assert.throws(() => folders.guard(store, state, "folder", null, viewed.id), /permission/);
+  const calls = server.calls.length;
+  await round(store, state, server);
+  assert.deepEqual(server.calls.slice(calls), ["pull_changes"], "nothing in a read-only team is sent back");
 });
 
 test("eight levels inside a team heading fit, but a ninth is rejected", async (t) => {
@@ -274,4 +303,109 @@ test("deleting a local folder merges a same-name child without losing pages", as
   store.deleteFolder(mutation(store, clients.revision), clients.id);
   assert.equal(store.get(ws(store), "note", note.id).folderId, outside.id);
   assert.equal(store.folderList(ws(store)).items.filter((f) => f.name === "Acme").length, 1);
+});
+
+const imageDoc = (id) => ({ type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "Board" }] }, { type: "noteAttachment", attrs: { id } }] });
+
+test("a teammate's page arrives read-only under its team and folder, and is never sent back", async (t) => {
+  const { store, state, server } = await setup(t);
+  await round(store, state, server);
+  const specs = await server.rpc("save_folder", { p_id: randomUUID(), p_space: ENG, p_parent: null, p_name: "Specs" });
+  const remote = server.teammate({ id: randomUUID(), folderId: specs.id });
+  await round(store, state, server);
+  const page = store.get(ws(store), "note", remote.id);
+  assert.equal(page.plainText, "Alice wrote this");
+  assert.equal(page.folderId, specs.id);
+  assert.deepEqual(require("../../workspace/notebook").publicNote(page).team, { readOnly: true, authorName: "Alice", spaceName: "Eng" });
+
+  assert.throws(() => store.updateNote(mutation(store, page.revision), page.id, { content: document("mine now") }), /teammate/);
+  assert.throws(() => store.delete(mutation(store, page.revision), "note", page.id), /teammate/);
+  assert.throws(() => store.moveNote(mutation(store, page.revision), page.id, null), /teammate/);
+  assert.throws(() => store.putAttachment(mutation(store), { noteId: page.id, displayName: "x.png", mediaType: "image/png" }, PNG), /teammate/);
+  const pinned = store.editNote(mutation(store, page.revision), page.id, { pinned: true });
+  assert.equal(pinned.metadata.pinned, true, "pinning is the reader's own choice");
+
+  const calls = server.calls.length;
+  await round(store, state, server);
+  assert.deepEqual(server.calls.slice(calls), ["pull_changes"], "a copy is never pushed and an unchanged one is not rewritten");
+
+  server.teammate({ id: remote.id, title: "Alice's spec v2", content: document("Revised") });
+  await round(store, state, server);
+  const updated = store.get(ws(store), "note", remote.id);
+  assert.equal(updated.title, "Alice's spec v2");
+  assert.equal(updated.metadata.pinned, true, "their edit keeps the reader's pin");
+});
+
+test("a teammate's images arrive with their page; until then the page shows without them", async (t) => {
+  const { store, state, server } = await setup(t);
+  await round(store, state, server);
+  const id = randomUUID(), image = randomUUID();
+  server.teammate({ id, content: imageDoc(image) });
+  await round(store, state, server);
+  assert.equal(store.get(ws(store), "note", id).plainText, "Board", "shown before its file is uploaded");
+  assert.equal(state.mirrored(id).complete, false);
+  server.teammateFile(id, image, PNG);
+  await round(store, state, server);
+  const page = store.get(ws(store), "note", id);
+  assert.equal(page.content.content[1].attrs.id, image);
+  assert.deepEqual(store.readAttachment(ws(store), image), PNG);
+  assert.equal(state.mirrored(id).complete, true);
+  const downloads = server.calls.filter((c) => c === "download").length;
+  await round(store, state, server);
+  assert.equal(server.calls.filter((c) => c === "download").length, downloads, "a file is fetched once");
+});
+
+test("a teammate's page that is no longer visible is erased here, files included", async (t) => {
+  const { store, state, server } = await setup(t);
+  await round(store, state, server);
+  const id = randomUUID(), image = randomUUID();
+  server.teammate({ id, content: imageDoc(image) });
+  server.teammateFile(id, image, PNG);
+  await round(store, state, server);
+  server.notes.get(id).deleted = true;
+  await round(store, state, server);
+  const raw = store._raw("note", id);
+  assert.ok(raw.deletedAt && raw.metadata.purgedAt, "erased, not in Trash");
+  assert.equal(raw.plainText, "");
+  assert.equal(store._raw("attachment", image).deletedAt !== null, true);
+  assert.equal(state.mirrored(id), null);
+  server.teammate({ id, content: document("Shared again") });
+  await round(store, state, server);
+  assert.equal(store.get(ws(store), "note", id).plainText, "Shared again", "visible again, it comes back");
+});
+
+test("a page shared from a team the person is not in gathers under Shared with you", async (t) => {
+  const { store, state, server } = await setup(t);
+  await round(store, state, server);
+  const elsewhere = "77777777-7777-4777-8777-777777777777";
+  const remote = server.teammate({ id: randomUUID(), spaceId: elsewhere, folderId: randomUUID() });
+  await round(store, state, server);
+  const root = state.rootForSpace(folders.SHARED);
+  assert.equal(store.get(ws(store), "note", remote.id).folderId, root);
+  assert.equal(store._raw("folder", root).name, "Shared with you");
+  assert.throws(() => folders.guard(store, state, "note", null, root), /permission/);
+});
+
+test("removal from the workspace erases teammates' pages but keeps the person's own", async (t) => {
+  const { store, state, server } = await setup(t);
+  await round(store, state, server);
+  const mine = store.createNote(mutation(store), { title: "Mine", content: document("my words") });
+  const theirs = server.teammate({ id: randomUUID() });
+  await round(store, state, server);
+  server.rpc = async () => { throw Object.assign(new Error("not allowed"), { code: "FORBIDDEN" }); };
+  const outcome = await round(store, state, server);
+  assert.equal(outcome.removed, true);
+  assert.equal(store._raw("note", theirs.id).metadata.purgedAt != null, true);
+  assert.equal(store.get(ws(store), "note", mine.id).plainText, "my words");
+});
+
+test("one page this Mac cannot read is reported without stopping the others", async (t) => {
+  const { store, state, server } = await setup(t);
+  await round(store, state, server);
+  const bad = server.teammate({ id: randomUUID(), title: "Broken", content: { type: "doc", content: [{ type: "mysteryNode" }] } });
+  const good = server.teammate({ id: randomUUID(), title: "Fine" });
+  await round(store, state, server);
+  assert.equal(store.get(ws(store), "note", good.id).title, "Fine");
+  assert.ok(!store._raw("note", bad.id));
+  assert.match(state.binding().lastError, /Broken/);
 });

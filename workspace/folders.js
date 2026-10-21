@@ -169,6 +169,7 @@ const methods = {
     return this._mutate(ctx, 'note.move', { id, folderId }, () => {
       const note = this._live('note', id);
       check(note, 'NOT_FOUND', 'Note does not exist');
+      this._ownNote(note);
       this._expected(ctx, note);
       const target = folderId == null ? null : v.uuid(folderId, 'folder id');
       if (target) check(this._live('folder', target), 'NOT_FOUND', 'Folder does not exist');

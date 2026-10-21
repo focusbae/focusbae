@@ -84,4 +84,13 @@ function attachmentIds(content) {
   return [...ids];
 }
 
-module.exports = { documentContent, EMPTY_DOCUMENT, attachmentIds };
+// The document without the attachments that are not on this Mac (yet), so a synced
+// page can be shown while its files are still on their way.
+function withoutAttachments(content, keep) {
+  const visit = (node) => node.content
+    ? { ...node, content: node.content.filter((child) => child.type !== 'noteAttachment' || keep.has(child.attrs?.id)).map(visit) }
+    : node;
+  return visit(content);
+}
+
+module.exports = { documentContent, EMPTY_DOCUMENT, attachmentIds, withoutAttachments };

@@ -11,7 +11,8 @@ const ctx = (store) => ({ workspaceId: store.identity.id });
 function prepare(store, state) {
   if (!state.privateSpaceId()) return;
   store._db.transaction(() => {
-    for (const space of state.spaces().filter((s) => s.kind !== "private" && s.role === "editor")) {
+    // Every team this person is in gets a heading, including ones they can only read.
+    for (const space of state.spaces().filter((s) => s.kind !== "private")) {
       let root = state.rootForSpace(space.id);
       if (!root) { root = randomUUID(); state.setRoot(space.id, root); }
       const old = store._raw("folder", root);
@@ -30,6 +31,21 @@ function prepare(store, state) {
     }
   })();
   store._teamFolderRoots = new Set(state.roots().map((r) => r.folderId));
+}
+
+// Pages shared with this person from a team they are not in have no team heading of
+// their own; they gather under one local heading, made when the first one arrives.
+const SHARED = "shared";
+function sharedRoot(store, state) {
+  let root = state.rootForSpace(SHARED);
+  if (!root) { root = randomUUID(); state.setRoot(SHARED, root); }
+  const old = store._raw("folder", root);
+  const taken = store._folderRows(store.identity.id).some((r) => r.id !== root && !r.parentId && r.name.toLowerCase() === "shared with you");
+  const name = taken ? `Shared with you · ${root.slice(0, 8)}` : "Shared with you";
+  if (!old) store._save("folder", { ...store._new(domain.folder({ name }, null)), id: root });
+  else if (old.deletedAt) store._save("folder", store._next(old, { deletedAt: null }));
+  store._teamFolderRoots = new Set(state.roots().map((r) => r.folderId));
+  return root;
 }
 
 function location(store, state, folderId) {
@@ -144,7 +160,8 @@ function decorate(store, state, listing) {
   const spaces = new Map(state.spaces().map((s) => [s.id, s]));
   return { ...listing, team: true, items: listing.items.map((f) => {
     const loc = location(store, state, f.id);
-    return { ...f, teamRoot: roots.has(f.id), spaceId: loc.spaceId, homeName: spaces.get(loc.spaceId)?.name ?? "My notes", writable: spaces.get(loc.spaceId)?.role === "editor" };
+    const homeName = loc.spaceId === SHARED ? "Shared with you" : spaces.get(loc.spaceId)?.name ?? "My notes";
+    return { ...f, teamRoot: roots.has(f.id), spaceId: loc.spaceId, homeName, writable: spaces.get(loc.spaceId)?.role === "editor" };
   }) };
 }
 
@@ -164,4 +181,4 @@ function guard(store, state, kind, id, target) {
   };
 }
 
-module.exports = { prepare, location, folderPayload, plan, apply, decorate, guard, hash };
+module.exports = { prepare, sharedRoot, SHARED, location, folderPayload, plan, apply, decorate, guard, hash };

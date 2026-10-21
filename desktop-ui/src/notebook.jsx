@@ -243,7 +243,7 @@ function PageMenu({ finding, findCommitments, showConnections, exportNote, remov
       <button type="button" role="menuitem" disabled={finding} onClick={pick(findCommitments)}>Find commitments</button>
       <button type="button" role="menuitem" onClick={pick(showConnections)}>Show connections</button>
       <button type="button" role="menuitem" onClick={pick(exportNote)}>Export page…</button>
-      <button type="button" role="menuitem" className="danger" onClick={pick(remove)}>Move to Trash</button>
+      {remove && <button type="button" role="menuitem" className="danger" onClick={pick(remove)}>Move to Trash</button>}
     </span>}
   </span>;
 }
@@ -469,9 +469,12 @@ function NoteEditor({
         }
       },
     });
+  // A teammate's page is read here, never written: co-editing comes later.
+  const teammate = note.team ?? null;
+  const locked = !!note.deletedAt || !!teammate;
   const queue = queueRef.current;
   const attachFiles = (items, position) => {
-    if (note.deletedAt || pendingPaste.current || !items.length) return;
+    if (locked || pendingPaste.current || !items.length) return;
     const selected = Array.from(items);
     if (selected.length > 20) { setError(new Error("Attach up to 20 files at a time.")); return; }
     setPasting(true);
@@ -515,7 +518,7 @@ function NoteEditor({
       NoteAttachment.configure({ workspaceId: note.workspaceId, noteId: note.id }),
     ],
     content: note.content,
-    editable: !note.deletedAt,
+    editable: !locked,
     editorProps: {
       attributes: {
         "aria-label": "Note body",
@@ -546,7 +549,7 @@ function NoteEditor({
           attachFiles(items);
           return true;
         }
-        if (pendingPaste.current || note.deletedAt) return true;
+        if (pendingPaste.current || locked) return true;
         const html = event.clipboardData?.getData("text/html");
         if (!html) return false;
         event.preventDefault();
@@ -619,7 +622,7 @@ function NoteEditor({
     };
   }, [queue, flushRef]);
   useEffect(() => {
-    if (!note.title && !note.deletedAt) titleRef.current?.focus();
+    if (!note.title && !locked) titleRef.current?.focus();
   }, []);
   // What the half-typed [[ could name. Asked for on every keystroke inside the
   // brackets, debounced, and dropped if a later query answers first.
@@ -768,9 +771,11 @@ function NoteEditor({
                     weekday: "long",
                     timeZone: "UTC",
                   }).format(new Date(`${note.dailyDate}T12:00:00Z`))
-                : "Notebook"}
+                : teammate
+                  ? <span className="note-owner"><LockKeyhole size={13} strokeWidth={1.7} />{teammate.authorName ? `${teammate.authorName}'s page` : "A teammate's page"}{teammate.spaceName ? ` · ${teammate.spaceName}` : ""}</span>
+                  : "Notebook"}
           </span>
-          {!note.deletedAt && note.kind !== "daily" && moveNote && folders.length > 0 && (
+          {!locked && note.kind !== "daily" && moveNote && folders.length > 0 && (
             <>
               <span className="note-folder-sep" aria-hidden="true">/</span>
               <select
@@ -789,7 +794,7 @@ function NoteEditor({
             </select>
             </>
           )}
-          {!note.deletedAt && teamWorkspaceId && <span className="note-home-hint" title="Location sets the home team. Additional shares and guest access remain until removed on the web.">Home location</span>}
+          {!locked && teamWorkspaceId && <span className="note-home-hint" title="Location sets the home team. Additional shares and guest access remain until removed on the web.">Home location</span>}
         </div>
         <div className="note-actions">
           {!note.deletedAt && (
@@ -818,7 +823,7 @@ function NoteEditor({
                 findCommitments={() => findCommitments(queue.note)}
                 showConnections={() => showConnections(queue.note)}
                 exportNote={() => exportNote(queue.note)}
-                remove={() =>
+                remove={teammate ? null : () =>
                   flushRef
                     .current()
                     .then((canonical) => remove(canonical))
@@ -838,13 +843,13 @@ function NoteEditor({
           placeholder="Untitled"
           maxLength={500}
           value={title}
-          readOnly={!!note.deletedAt}
+          readOnly={locked}
           onChange={(event) => {
             setTitle(event.target.value);
             queue.edit({ title: event.target.value });
           }}
         />
-        {!note.deletedAt && (
+        {!locked && (
           <div
             className="format-bar"
             role="toolbar"
@@ -957,7 +962,9 @@ function NoteEditor({
               ? "Rewriting on this Mac..."
               : note.deletedAt
                 ? "In Trash"
-                : status}
+                : teammate
+                  ? "Read only · only its author can edit it"
+                  : status}
         </div>
         {open && targets.length > 0 && suggestion?.coords && (
           <LinkSuggestions
@@ -1327,6 +1334,23 @@ export function Notebook({
       current = false;
     };
   }, [workspace.id, version, refreshKey]);
+  // A teammate's page has no local edits to protect, so their changes simply replace
+  // what is shown; a page that is no longer visible closes.
+  const openTeammateId = payload?.kind === "note" && payload.note.team ? payload.note.id : null;
+  useEffect(() => {
+    if (!openTeammateId || !refreshKey) return;
+    let current = true;
+    loadNote(openTeammateId)
+      .then((saved) => {
+        if (!current || saved.revision === payload.note.revision) return;
+        setPayload({ kind: "note", note: saved });
+        setEditorVersion((value) => value + 1);
+      })
+      .catch(() => current && setPayload(null));
+    return () => {
+      current = false;
+    };
+  }, [openTeammateId, refreshKey]);
   const selectedFolder =
     folderId && folderId !== "unfiled"
       ? folders.items.find((item) => item.id === folderId)

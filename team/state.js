@@ -33,6 +33,10 @@ CREATE TABLE IF NOT EXISTS shared (action_id TEXT PRIMARY KEY, sent_hash TEXT NO
 CREATE TABLE IF NOT EXISTS note_spaces (note_id TEXT PRIMARY KEY, space_id TEXT NOT NULL, updated_at TEXT NOT NULL) STRICT;
 CREATE TABLE IF NOT EXISTS notes_sent (note_id TEXT PRIMARY KEY, sent_hash TEXT NOT NULL, server_version INTEGER) STRICT;
 CREATE TABLE IF NOT EXISTS attachments_sent (attachment_id TEXT PRIMARY KEY, note_id TEXT NOT NULL, content_hash TEXT NOT NULL, uploaded INTEGER NOT NULL) STRICT;
+-- Pages pulled onto this Mac (teammates' read-only copies, and this person's own pages
+-- written on the web): the version copied and whether all its files had arrived.
+CREATE TABLE IF NOT EXISTS mirrored (note_id TEXT PRIMARY KEY, version INTEGER NOT NULL, complete INTEGER NOT NULL) STRICT;
+CREATE TABLE IF NOT EXISTS mirrored_attachments (attachment_id TEXT PRIMARY KEY, note_id TEXT NOT NULL) STRICT;
 CREATE TABLE IF NOT EXISTS remote_notes (id TEXT PRIMARY KEY, version INTEGER NOT NULL, data_json TEXT NOT NULL CHECK(json_valid(data_json))) STRICT;
 -- Who the team sees as owing an action and who it is owed to, chosen on this Mac.
 -- Absent = the default (the action's own owner; the one other named person, if any).
@@ -107,7 +111,7 @@ class TeamState {
   // Removed from the workspace: keep the binding as a marker, forget everything synced.
   markRemoved() {
     this.db.transaction(() => {
-      for (const table of ["spaces", "people", "commitments", "shared", "mappings", "note_spaces", "notes_sent", "attachments_sent", "remote_notes"]) this.db.prepare(`DELETE FROM ${table}`).run();
+      for (const table of ["spaces", "people", "commitments", "shared", "mappings", "note_spaces", "notes_sent", "attachments_sent", "remote_notes", "mirrored", "mirrored_attachments"]) this.db.prepare(`DELETE FROM ${table}`).run();
       this.db.prepare("UPDATE binding SET status = 'removed', cursor = 0").run();
     })();
   }
@@ -183,6 +187,23 @@ class TeamState {
   }
   remoteNotes() {
     return this.db.prepare("SELECT data_json FROM remote_notes").all().map((row) => JSON.parse(row.data_json));
+  }
+  mirrored(noteId) {
+    const row = this.db.prepare("SELECT version, complete FROM mirrored WHERE note_id = ?").get(noteId);
+    return row ? { version: row.version, complete: row.complete === 1 } : null;
+  }
+  markMirrored(noteId, version, complete) {
+    this.db.prepare(`INSERT INTO mirrored VALUES (?, ?, ?) ON CONFLICT(note_id) DO UPDATE SET
+      version = excluded.version, complete = excluded.complete`).run(noteId, version, complete ? 1 : 0);
+  }
+  forgetMirrored(noteId) {
+    this.db.prepare("DELETE FROM mirrored WHERE note_id = ?").run(noteId);
+    this.db.prepare("DELETE FROM mirrored_attachments WHERE note_id = ?").run(noteId);
+  }
+  mirroredIds() { return this.db.prepare("SELECT note_id FROM mirrored").all().map((row) => row.note_id); }
+  attachmentMirrored(attachmentId) { return !!this.db.prepare("SELECT 1 FROM mirrored_attachments WHERE attachment_id = ?").get(attachmentId); }
+  markAttachmentMirrored(attachmentId, noteId) {
+    this.db.prepare("INSERT OR IGNORE INTO mirrored_attachments VALUES (?, ?)").run(attachmentId, noteId);
   }
   sharedIds() { return this.db.prepare("SELECT action_id FROM shared").all().map((row) => row.action_id); }
   close() { if (this.db.open) this.db.close(); }

@@ -40,18 +40,7 @@ const EXTRACTORS = {
   },
   // After "This is me": the account owner's speaker is "You", everyone else is an
   // anonymous detected speaker. Owners map self->self, a named person->other.
-  "apple-me": async (meeting) => {
-    const owner = meeting.accountOwner ?? "Me";
-    const names = new Map();
-    const segments = meeting.segments.map((segment) => {
-      if (!segment.speaker) return { ...segment, speaker: null };
-      if (segment.speaker === owner) return { ...segment, speaker: "You" };
-      if (!names.has(segment.speaker)) names.set(segment.speaker, `Speaker ${names.size + 1}`);
-      return { ...segment, speaker: names.get(segment.speaker) };
-    });
-    const found = await EXTRACTORS.apple({ ...meeting, accountOwner: "You", segments }, { raw: true });
-    return found.map((item) => ({ ...item, owner: ownerFor(item, segments) }));
-  },
+  "apple-me": (meeting) => asMe(meeting, (m) => EXTRACTORS.apple(m, { raw: true })),
   // Apple Foundation Models on-device (macOS 26+, Apple Intelligence enabled).
   // Build first with: bash local-ai/apple-extract/build.sh
   apple: async (meeting, { raw = false } = {}) => {
@@ -70,7 +59,34 @@ const EXTRACTORS = {
     if (raw) return found;
     return found.map((item) => ({ ...item, owner: ownerFor(item, meeting.segments, meeting.accountOwner ?? "Me") }));
   },
+  // Level 2 candidates (cloud.js): the same prompt sent to a cloud model, scored the same
+  // two ways as Apple's: with names as labelled, and as the app sees them after "This is me".
+  claude: (meeting) => cloudOwners(meeting, (m) => cloud.extract("anthropic", m, usage)),
+  "claude-me": (meeting) => asMe(meeting, (m) => cloud.extract("anthropic", m, usage)),
+  openai: (meeting) => cloudOwners(meeting, (m) => cloud.extract("openai", m, usage)),
+  "openai-me": (meeting) => asMe(meeting, (m) => cloud.extract("openai", m, usage)),
 };
+
+const cloud = require("./cloud");
+const usage = { input: 0, output: 0, model: null };
+
+async function cloudOwners(meeting, run) {
+  const found = await run(meeting);
+  return found.map((item) => ({ ...item, owner: ownerFor(item, meeting.segments, meeting.accountOwner ?? "Me") }));
+}
+
+async function asMe(meeting, run) {
+  const owner = meeting.accountOwner ?? "Me";
+  const names = new Map();
+  const segments = meeting.segments.map((segment) => {
+    if (!segment.speaker) return { ...segment, speaker: null };
+    if (segment.speaker === owner) return { ...segment, speaker: "You" };
+    if (!names.has(segment.speaker)) names.set(segment.speaker, `Speaker ${names.size + 1}`);
+    return { ...segment, speaker: names.get(segment.speaker) };
+  });
+  const found = await run({ ...meeting, accountOwner: "You", segments });
+  return found.map((item) => ({ ...item, owner: ownerFor(item, segments) }));
+}
 
 // Applies the app's owner resolution (workspace/action-extraction.js resolveOwner)
 // using the speaker labels this transcript provides.
@@ -179,6 +195,7 @@ async function main() {
   console.log(`recall    ${pct(result.recall)} (${result.truePositive}/${result.expected})`);
   console.log(`owner     ${pct(result.ownerAccuracy)} of matched (${result.ownerCorrect}/${result.truePositive})`);
   console.log(`end-to-end ${pct(result.endToEnd)} of labelled commitments found with the right owner`);
+  if (usage.model) console.log(`model ${usage.model} · ${usage.input} input + ${usage.output} output tokens`);
   for (const m of result.meetings) {
     for (const quote of m.misses) console.log(`  miss  [${m.id}] ${quote}`);
     for (const quote of m.falsePositives) console.log(`  false [${m.id}] ${quote}`);

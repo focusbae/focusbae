@@ -12,6 +12,19 @@ node qualification/extraction/score.js --json    # machine-readable
 bash local-ai/apple-extract/build.sh && node qualification/extraction/score.js --extractor apple
 ```
 
+## Cloud extractors (processing level 2)
+
+`claude` and `openai` send the same instructions and transcript as the on-device model
+(`cloud.js`), so differences come from the model. Anthropic is the primary provider and
+OpenAI the backup. `claude-me` / `openai-me` score them as the app would see a meeting
+after "This is me". Keys and models go in `qualification/.env` (git-ignored); list
+available models with `node qualification/extraction/cloud.js --models openai`.
+
+```bash
+node qualification/extraction/score.js --extractor claude
+node qualification/extraction/score.js --extractor claude-me
+```
+
 ## Metrics
 
 | Metric | Meaning |

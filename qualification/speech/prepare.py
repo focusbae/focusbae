@@ -6,11 +6,12 @@ Sets (all CC-BY-4.0, attribution in README.md):
   ami-farfield  AMI meeting corpus, table-top array microphone 1, 2 meetings
   libri-clean   LibriSpeech test-clean read speech
   fleurs-hi     FLEURS Hindi (dev split) read speech
+  edacc-*       EdAcc conversational English by accent group (CC BY-SA 4.0)
 
 Clips are cut at pauses so no reference word is split. Standard library only;
 FLAC is converted with macOS afconvert.
 """
-import csv, io, json, os, random, re, subprocess, sys, tarfile, urllib.request, wave, zipfile
+import csv, io, json, os, random, re, subprocess, sys, tarfile, time, urllib.error, urllib.request, wave, zipfile
 import xml.etree.ElementTree as ET
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -24,6 +25,19 @@ FARFIELD_MEETINGS = ["ES2004a", "IS1009a"]
 CLIPS_PER_MEETING = 12
 LIBRI_UTTERANCES = 40
 FLEURS_UTTERANCES = 40
+EDACC_ROWS = "https://datasets-server.huggingface.co/rows?dataset=edinburghcstr/edacc&config=default&split=test"
+EDACC_PER_GROUP = 15
+# EdAcc's accent labels grouped the way customers differ: where English is spoken as a
+# first language, and the first languages of second-language speakers.
+EDACC_GROUPS = {
+    "indian": ["Indian English"],
+    "us": ["Mainstream US English"],
+    "uk-ireland": ["Southern British English", "Scottish English", "Irish English"],
+    "african": ["Nigerian English", "Kenyan English", "Ghanain English"],
+    "caribbean": ["Jamaican English"],
+    "european-l2": ["Spanish", "Italian", "Romanian", "Lithuanian", "Catalan", "French", "Bulgarian", "European", "Eastern European", "Israeli"],
+    "asian-l2": ["Chinese", "Vietnamese", "Indonesian"],
+}
 
 
 def fetch(url, target):
@@ -161,6 +175,77 @@ def prepare_fleurs(items):
             items.append({"set": "fleurs-hi", "id": name[:-4], "lang": "hi", "wav": wav, "ref": rows[name], "seconds": round(seconds, 2), "speakers": 1})
 
 
+def download(url, attempts=8):
+    """GET with back-off: the Hugging Face dataset API rate-limits bursts (HTTP 429)."""
+    for attempt in range(attempts):
+        try:
+            with urllib.request.urlopen(url, timeout=60) as r:
+                return r.read()
+        except urllib.error.HTTPError as error:
+            if error.code not in (429, 500, 502, 503) or attempt == attempts - 1:
+                raise
+            time.sleep(min(60, 2 ** attempt + random.random()))
+        except (TimeoutError, ConnectionError, urllib.error.URLError):
+            if attempt == attempts - 1:
+                raise
+            time.sleep(min(60, 2 ** attempt + random.random()))
+
+
+def prepare_edacc(items):
+    """Conversational English across accents: real two-person video calls, which is
+    what customers record. Up to EDACC_PER_GROUP utterances per group, of 4-30 seconds
+    and at least six words, spread across speakers."""
+    index = os.path.join(RAW, "edacc-test-rows.json")
+    if not os.path.exists(index):
+        rows = []
+        for offset in range(0, 10000, 100):
+            page = json.loads(download(f"{EDACC_ROWS}&offset={offset}&length=100"))
+            rows += [dict(row["row"], index=row["row_idx"]) for row in page["rows"]]
+            if offset + 100 >= page["num_rows_total"]:
+                break
+        json.dump(rows, open(index, "w"))
+    rows = json.load(open(index))
+    clean = lambda t: re.sub(r"\s+", " ", re.sub(r"<[^>]*>|\[[^\]]*\]|\([^)]*\)", " ", t)).strip()
+    rng = random.Random(11)
+    for group, accents in EDACC_GROUPS.items():
+        pool = [r for r in rows if r["accent"] in accents and len(clean(r["text"]).split()) >= 6]
+        rng.shuffle(pool)
+        # Round-robin over speakers so one talkative person cannot dominate a group.
+        by_speaker = {}
+        for r in pool:
+            by_speaker.setdefault(r["speaker"], []).append(r)
+        chosen, queues = [], list(by_speaker.values())
+        while queues and len(chosen) < EDACC_PER_GROUP * 3:
+            queues = [q for q in queues if q]
+            for q in queues:
+                chosen.append(q.pop())
+        folder = os.path.join(CLIPS, f"edacc-{group}"); os.makedirs(folder, exist_ok=True)
+        kept = 0
+        for r in chosen:
+            if kept >= EDACC_PER_GROUP:
+                break
+            wav = os.path.join(folder, f"{r['index']}.wav")
+            if not os.path.exists(wav):
+                raw = wav + ".src.wav"
+                try:
+                    audio = download(r["audio"][0]["src"])
+                except urllib.error.HTTPError as error:
+                    if error.code != 403:
+                        raise
+                    # Audio links are signed and expire; ask for this row again.
+                    fresh = json.loads(download(f"{EDACC_ROWS}&offset={r['index']}&length=1"))["rows"][0]["row"]
+                    audio = download(fresh["audio"][0]["src"])
+                open(raw, "wb").write(audio)
+                to_wav(raw, wav); os.remove(raw)
+            with wave.open(wav) as w:
+                seconds = w.getnframes() / 16000
+            if not 4 <= seconds <= 30:
+                os.remove(wav); continue
+            kept += 1
+            items.append({"set": f"edacc-{group}", "id": str(r["index"]), "lang": "en", "wav": wav, "ref": clean(r["text"]),
+                          "accent": r["accent"], "l1": r["l1"], "seconds": round(seconds, 2), "speakers": 1})
+
+
 HINGLISH = [
     ("Deck मैं Thursday तक भेज दूंगी, बाकी Raghav के साथ sync कर लेंगे", ["deck", "thursday", "raghav", "sync"]),
     ("Invoice Friday से पहले finance को भेजना है", ["invoice", "friday", "finance"]),
@@ -210,12 +295,20 @@ def prepare_synthetic(items):
 
 
 def main():
+    # --only edacc,...: refresh those sets and keep the rest of the manifest as it is.
+    only = sys.argv[sys.argv.index("--only") + 1].split(",") if "--only" in sys.argv else None
+    manifest = os.path.join(DATA, "manifest.json")
     items = []
-    annotations = fetch(f"{AMI_MIRROR}/annotations/ami_public_manual_1.6.2.zip", os.path.join(RAW, "ami_public_manual_1.6.2.zip"))
-    prepare_ami(items, annotations)
-    prepare_libri(items)
-    prepare_fleurs(items)
-    prepare_synthetic(items)
+    if only:
+        items = [dict(i, wav=os.path.join(DATA, i["wav"])) for i in json.load(open(manifest, encoding="utf-8"))
+                 if not any(i["set"] == o or i["set"].startswith(o + "-") for o in only)]
+    steps = {"ami": lambda: prepare_ami(items, fetch(f"{AMI_MIRROR}/annotations/ami_public_manual_1.6.2.zip",
+                                                     os.path.join(RAW, "ami_public_manual_1.6.2.zip"))),
+             "libri": lambda: prepare_libri(items), "fleurs": lambda: prepare_fleurs(items),
+             "synthetic": lambda: prepare_synthetic(items), "edacc": lambda: prepare_edacc(items)}
+    for name, step in steps.items():
+        if not only or name in only:
+            step()
     for item in items:
         item["wav"] = os.path.relpath(item["wav"], DATA)
     json.dump(items, open(os.path.join(DATA, "manifest.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)

@@ -180,6 +180,26 @@ class TeamAccount extends EventEmitter {
     if (!response.ok) throw fail("REMOTE", `Upload failed (${response.status})`);
   }
 
+  // A short-lived Deepgram token for one recording's cloud transcription (level 3). The
+  // team service checks the workspace allows it and records the grant; audio then goes
+  // from this Mac to Deepgram, never through the team service.
+  async speechToken(workspace) {
+    const ticket = this.policy.ticket();
+    this.policy.assert("team", ticket);
+    const token = await this.#accessToken(ticket);
+    this.policy.assert("team", ticket);
+    const response = await this.fetch(new URL("/api/desktop/speech-token", this.teamUrl), {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify({ workspace }),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (response.status === 403) throw fail("FORBIDDEN", "Cloud transcription isn't allowed for this workspace");
+    if (response.status === 429) throw fail("RATE_LIMITED", "Too many cloud transcriptions in the last hour");
+    if (!response.ok || !body.accessToken) throw fail("REMOTE", `Cloud transcription is unavailable (${body.error ?? response.status})`);
+    return { accessToken: body.accessToken, expiresAt: body.expiresAt };
+  }
+
   // Reads a file from the team's private storage; null when it is not there (yet).
   async download(bucket, objectPath) {
     const ticket = this.policy.ticket();

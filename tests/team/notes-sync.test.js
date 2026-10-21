@@ -534,3 +534,30 @@ test("removed from a team, edits not yet sent are saved as a copy in My notes an
   await round(store, state, server);
   assert.equal(store.get(ws(store), "note", page.id).team ?? null, null, "editable again");
 });
+
+test("cloud transcription is offered only where the admin allows level 3, to the connected account, outside Strict Local", async (t) => {
+  const { store, state } = await setup(t);
+  const { EventEmitter } = require("node:events");
+  const { TeamService } = require("../../team/service");
+  const { LocalPolicy } = require("../../privacy/local-policy");
+  const policy = new LocalPolicy();
+  policy.setTeamConnected(true);
+  const asked = [];
+  const account = Object.assign(new EventEmitter(), { status: () => ({ connected: true, userId: "u1" }), speechToken: async (ws) => { asked.push(ws); return { accessToken: "x" }; } });
+  const service = new TeamService({ account, policy, catalog: { store, serialize: async () => null } });
+  t.after(() => service.stop());
+  const pull = (level) => state.applyPull({ cursor: 1, workspace: { name: "Acme", role: "member", processingLevelMax: level }, me: { personId: "me" },
+    spaces: [], people: [], commitments: [], visibleCommitmentIds: [], notes: [], visibleNoteIds: [] });
+  pull(1);
+  assert.equal(service.cloudSpeech(store), null, "level 1: this Mac only");
+  pull(3);
+  const cloud = service.cloudSpeech(store);
+  await cloud.token();
+  assert.deepEqual(asked, [WS], "the token is asked for this workspace");
+  policy.setStrict(true);
+  assert.equal(service.cloudSpeech(store), null, "Strict Local");
+  policy.setStrict(false);
+  policy.setTeamConnected(true);
+  account.status = () => ({ connected: true, userId: "someone-else" });
+  assert.equal(service.cloudSpeech(store), null, "another account");
+});

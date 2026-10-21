@@ -233,6 +233,23 @@ class TeamService extends EventEmitter {
     return this.mapping(actionId);
   }
 
+  // Deepgram access for recordings in this workspace, or null: a team workspace bound to
+  // the connected account, allowed level 3 by its admin, with team network allowed
+  // (connected, not Strict Local). Checked when a recording starts and again when it
+  // is transcribed, so a change in between is respected.
+  cloudSpeech(store) {
+    if (!store || !TeamState.exists(store._directory) || !this.policy.allows("team")) return null;
+    const state = new TeamState(store._directory);
+    try {
+      const binding = state.binding();
+      if (binding.status === "removed" || binding.accountUserId !== this.account.status().userId) return null;
+      if ((binding.processingLevelMax ?? 1) < 3) return null;
+      return { policy: this.policy, token: () => this.account.speechToken(binding.serverWorkspaceId) };
+    } finally {
+      state.close();
+    }
+  }
+
   // Called inside the existing IPC workspace queue; never re-enters that queue.
   withFolders(store, fn) {
     if (!TeamState.exists(store._directory)) return null;

@@ -53,6 +53,9 @@ function publicRecording(record) {
     diarization: record.metadata?.diarization ?? null,
     gaps: record.metadata?.gaps ?? [],
     microphones: record.metadata?.microphones ?? [],
+    // "cloud" when the person chose Deepgram (level 3) for this recording; the badge.
+    processing: record.metadata?.processing ?? "local",
+    processingNote: record.metadata?.processingNote ?? null,
     aiState: record.aiState,
   };
 }
@@ -112,6 +115,9 @@ class RecordingService extends EventEmitter {
     speech = null,
     model = null,
     createEngine = null,
+    // (store) => null, or { token, policy } when this workspace may transcribe in the
+    // cloud right now (team service: level 3 allowed, account connected).
+    cloudSpeech = null,
     legacyBusy = () => false,
     clock = () => performance.now(),
     startTimeout = 15000,
@@ -145,6 +151,7 @@ class RecordingService extends EventEmitter {
       extractor,
       diarizer,
       speech,
+      cloudSpeech,
     });
     // Readiness is per recording language; see recording/speech.js for routing.
     this.model =
@@ -199,6 +206,7 @@ class RecordingService extends EventEmitter {
       "consent",
       "keepAudio",
       "microphone",
+      "processing",
     ]);
     const store = this.catalog.scoped(input.context.workspaceId);
     // The microphone chosen in the record dialog, by name; null follows the Mac's
@@ -213,6 +221,10 @@ class RecordingService extends EventEmitter {
     v.choice(input.sourceMode, ["microphone", "system", "both"], "source");
     v.choice(input.language, ["english", "hindi", "mixed"], "language");
     const keepAudio = v.boolean(input.keepAudio ?? false, "keepAudio");
+    // "cloud": transcribe with Deepgram (processing level 3); only where it is allowed.
+    const processing = v.choice(input.processing ?? "local", ["local", "cloud"], "processing");
+    check(processing === "local" || this.cloudSpeech?.(store), "CLOUD_UNAVAILABLE",
+      "Cloud transcription isn't available for this workspace right now");
     check(
       input.consent === true,
       "CONSENT_REQUIRED",
@@ -265,7 +277,7 @@ class RecordingService extends EventEmitter {
           retainedAudio: keepAudio,
           participantConsent: true,
         },
-        metadata: { localCaptureVersion: 1, language: input.language },
+        metadata: { localCaptureVersion: 1, language: input.language, processing },
       });
       const noteId =
         input.destination.kind === "today"
@@ -678,7 +690,7 @@ class RecordingService extends EventEmitter {
     }
     const language = session.spool?.manifest.language ?? "english";
     await this.speech?.prepare().catch(() => {});
-    if (!this.closing && failure !== "disk" && this.model(language).ready) {
+    if (!this.closing && failure !== "disk" && (this.model(language).ready || this.cloudFor(session.store, this.current(session)))) {
       try {
         await this.retry(session.id);
       } catch {
@@ -686,6 +698,10 @@ class RecordingService extends EventEmitter {
       }
     }
     return publicRecording(this.current(session));
+  }
+  // Deepgram access for a recording that chose cloud transcription, if still allowed.
+  cloudFor(store, record) {
+    return record?.metadata?.processing === "cloud" ? this.cloudSpeech?.(store) ?? null : null;
   }
   async retry(id) {
     // Probe engine availability first; the checks below then run without awaiting.
@@ -711,8 +727,9 @@ class RecordingService extends EventEmitter {
     );
     if (record.transcriptionState === "complete" && spool.manifest.purged)
       return Promise.resolve(publicRecording(record));
+    const cloud = this.cloudFor(store, record);
     check(
-      this.model(spool.manifest.language).ready,
+      cloud || this.model(spool.manifest.language).ready,
       "MODEL_MISSING",
       spool.manifest.language === "english"
         ? "Transcription needs Apple speech (macOS 26) or the Parakeet download"
@@ -723,11 +740,14 @@ class RecordingService extends EventEmitter {
       store,
       spool,
       cancelled: false,
-      engine: this.createEngine({
-        language: spool.manifest.language,
-        directory: spool.directory,
-      }),
+      engine: cloud
+        ? new (require("./deepgram").DeepgramEngine)({ language: spool.manifest.language, ...cloud })
+        : this.createEngine({ language: spool.manifest.language, directory: spool.directory }),
     };
+    // Chosen for the cloud but no longer allowed (signed out, Strict Local, admin
+    // lowered the level): transcribed on this Mac instead, and the recording says so.
+    if (!cloud && record.metadata.processing === "cloud")
+      this.update(task, { metadata: { processingNote: "Cloud transcription wasn't available, so this Mac transcribed it." } });
     this.processing = task;
     task.promise = this.process(task).finally(async () => {
       try {

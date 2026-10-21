@@ -136,6 +136,23 @@ export function RecordDialog({
   const [consent, setConsent] = useState(false);
   const [keepAudio, setKeepAudio] = useState(false);
   const [notes, setNotes] = useState([]);
+  // Cloud transcription (processing level 3) when this team workspace allows it. The
+  // admin's highest level is the default; the person can keep this one on the Mac.
+  const [cloud, setCloud] = useState(false);
+  const [processing, setProcessing] = useState("local");
+  useEffect(() => {
+    let current = true;
+    unwrap(api.capture.cloud({ workspaceId: workspace.id }))
+      .then((value) => {
+        if (!current) return;
+        setCloud(value.available);
+        setProcessing(value.available ? "cloud" : "local");
+      })
+      .catch(() => {});
+    return () => {
+      current = false;
+    };
+  }, [workspace.id]);
   // The chosen microphone is remembered on this Mac by name; empty follows the
   // Mac's default input, which switches to AirPods or a headset when they connect.
   const [microphone, setMicrophone] = useState(() => {
@@ -201,6 +218,7 @@ export function RecordDialog({
                 language,
                 consent,
                 keepAudio,
+                processing,
                 microphone: source === "system" ? null : microphone || null,
                 destination: ["today", "standalone"].includes(destination)
                   ? { kind: destination }
@@ -317,6 +335,26 @@ export function RecordDialog({
           <option value="hindi">Hindi</option>
           <option value="mixed">English + Hindi (experimental)</option>
         </select>
+        {cloud && (
+          <>
+            <label htmlFor="capture-processing">Transcribe with</label>
+            <select
+              id="capture-processing"
+              value={processing}
+              disabled={busy}
+              onChange={(event) => setProcessing(event.target.value)}
+            >
+              <option value="cloud">Deepgram (cloud): more accurate with accents and meetings</option>
+              <option value="local">This Mac only</option>
+            </select>
+            {processing === "cloud" && (
+              <p className="capture-permission">
+                Audio goes from this Mac to Deepgram for transcription, not through FocusBae, and
+                Deepgram doesn't train on it. Your workspace allows this.
+              </p>
+            )}
+          </>
+        )}
         <label htmlFor="capture-destination">Save with</label>
         <select
           id="capture-destination"
@@ -343,7 +381,7 @@ export function RecordDialog({
           unless you delete it. Recent uncommitted audio may be lost if the app
           stops unexpectedly.
         </p>}
-        {!speechReady(status, language) && (
+        {processing !== "cloud" && !speechReady(status, language) && (
           <>
             <p className="model-status">
               {language === "english"
@@ -849,6 +887,10 @@ export function Recordings({
               <span>{sourceName[record.sourceMode]}</span>
               <span>{record.state}</span>
               <span>{time(record.durationMs)}</span>
+              {/* Every recording says where it was transcribed (TEAM_PLAN §3). */}
+              <span className="processing-badge" title={record.processing === "cloud" ? "Audio was sent to Deepgram for transcription" : "Transcribed on this Mac"}>
+                {record.processing === "cloud" && !record.processingNote ? "Deepgram (cloud)" : "On this Mac"}
+              </span>
               {record.microphones?.length > 0 && <span title="Microphone used">{record.microphones.join(", then ")}</span>}
               {record.originalName && <span className="recording-original" title={record.originalName}>Original: {record.originalName}</span>}
             </div>
@@ -941,6 +983,7 @@ export function Recordings({
               </div>
             )}
             {canPlay && <AudioPlayer key={`${workspace.id}:${selectedId}`} ref={player} workspaceId={workspace.id} id={selectedId} />}
+            {record.processingNote && <p className="capture-permission">{record.processingNote}</p>}
             {record.processingError &&
               record.transcriptionState !== "complete" && (
                 <p className="recording-warning">{record.processingError}</p>

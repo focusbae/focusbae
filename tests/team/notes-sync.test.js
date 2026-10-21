@@ -409,3 +409,38 @@ test("one page this Mac cannot read is reported without stopping the others", as
   assert.ok(!store._raw("note", bad.id));
   assert.match(state.binding().lastError, /Broken/);
 });
+
+test("a person page lists pages that mention them, teammates' pages included", async (t) => {
+  const { store, state, server } = await setup(t);
+  await round(store, state, server);
+  const mine = store.createNote(mutation(store), { title: "1:1 notes", content: document("Agreed with [[Priya]] on scope") });
+  store.createNote(mutation(store), { title: "Priya", content: document("Her page, not a mention") });
+  const theirs = server.teammate({ id: randomUUID(), title: "Standup", content: document("[[ priya ]] owns the rollout") });
+  await round(store, state, server);
+  const pages = require("../../workspace/people").pages(store, store.identity.id, "Priya");
+  assert.deepEqual(pages.map((p) => p.id).sort(), [mine.id, theirs.id].sort());
+  assert.equal(pages.find((p) => p.id === theirs.id).authorName, "Alice");
+});
+
+test("team people and their open promises come from the synced ledger, without this Mac's own", async (t) => {
+  const { store, state } = await setup(t);
+  const { TeamService } = require("../../team/service");
+  const { EventEmitter } = require("node:events");
+  state.applyPull({
+    cursor: 1, workspace: { name: "Acme", role: "member", processingLevelMax: 1 }, me: { personId: "me" },
+    spaces: [], people: [{ id: "me", name: "Me", isMember: true }, { id: ALICE, name: "Alice", email: "alice@acme.com", isMember: true }],
+    commitments: [
+      { id: "c1", version: 1, title: "Send the deck", status: "accepted", owner_person_id: ALICE, counterparty_person_id: "me", due_date: null, quote: "I'll send it", source_title: "Standup" },
+      { id: "c2", version: 1, title: "Review pricing", status: "accepted", owner_person_id: "me", counterparty_person_id: ALICE, due_date: null },
+      { id: "c3", version: 1, title: "Old thing", status: "done", owner_person_id: ALICE, counterparty_person_id: null, due_date: null },
+    ],
+    visibleCommitmentIds: ["c1", "c2", "c3"], notes: [], visibleNoteIds: [],
+  });
+  state.markSent("c2", "h", 1); // this Mac's own action, already on its local People page
+  const service = new TeamService({ account: new EventEmitter(), policy: Object.assign(new EventEmitter(), { allows: () => false }), catalog: { store } });
+  assert.deepEqual(service.teamPeople(), [{ id: ALICE, name: "Alice", email: "alice@acme.com", isMember: true, owes: 1, owed: 0 }]);
+  const alice = service.teamPerson(" alice ");
+  assert.deepEqual(alice.owes.map((c) => [c.title, c.owner, c.counterparty, c.sourceTitle]), [["Send the deck", "Alice", "You", "Standup"]]);
+  assert.equal(alice.owed.length, 0);
+  assert.equal(service.teamPerson("Nobody"), null);
+});

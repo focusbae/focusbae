@@ -31,7 +31,7 @@ contextBridge.exposeInMainWorld("focusbaeWorkspace", {
     return () => ipcRenderer.removeListener("workspace:backup-event", handler);
   },
   team: Object.fromEntries(
-    ["state", "connect", "cancelConnect", "disconnect", "remoteWorkspaces", "join", "sync", "ledger", "mapping", "setMapping", "noteVisibility", "setNoteVisibility"].map(
+    ["state", "connect", "cancelConnect", "disconnect", "remoteWorkspaces", "join", "sync", "ledger", "mapping", "setMapping", "noteVisibility", "setNoteVisibility", "people", "person"].map(
       (name) => [name, (input) => invoke(`team.${name}`, input)],
     ),
   ),
@@ -165,6 +165,7 @@ contextBridge.exposeInMainWorld("focusbaeWorkspace", {
   people: {
     list: (input) => invoke("people.list", input),
     get: (input) => invoke("people.get", input),
+    pages: (input) => invoke("people.pages", input),
     priorContext: (input) => invoke("people.priorContext", input),
   },
   reminders: {

@@ -78,6 +78,7 @@ const CHANNELS = [
   "notes.findCommitments",
   "notes.rewrite",
   "people.get",
+  "people.pages",
   "people.priorContext",
   "reminders.snooze",
   "privacy.get",
@@ -118,6 +119,8 @@ const CHANNELS = [
   "team.setMapping",
   "team.noteVisibility",
   "team.setNoteVisibility",
+  "team.people",
+  "team.person",
 ];
 const PUBLIC_ERRORS = {
   ATTACHMENT_TOO_LARGE: "This file is larger than 100 MB. Choose a smaller file.",
@@ -184,6 +187,7 @@ const PUBLIC_ERRORS = {
   KEYCHAIN_UNAVAILABLE: "FocusBae could not use the macOS Keychain to store your team sign-in.",
   ALREADY_EXISTS: "That team workspace is already on this Mac.",
   FORBIDDEN: "You don't have access to that team workspace.",
+  READ_ONLY: "This page belongs to a teammate. Only they can change it.",
 };
 function publicError(error) {
   const code = Object.hasOwn(PUBLIC_ERRORS, error.code)
@@ -984,6 +988,10 @@ function registerWorkspaceIPC({
       v.object(input, ["workspaceId", "id"]);
       return require("./people").get(catalog.scoped(input.workspaceId), input.workspaceId, input.id);
     },
+    "people.pages": (input) => {
+      v.object(input, ["workspaceId", "name"]);
+      return require("./people").pages(catalog.scoped(input.workspaceId), input.workspaceId, v.text(input.name, "name", 200));
+    },
     "people.priorContext": (input) => {
       v.object(input, ["workspaceId", "recordingId"]);
       return require("./people").priorContext(
@@ -1089,6 +1097,16 @@ function registerWorkspaceIPC({
       v.object(input, ["workspaceId", "noteId", "spaceId"]);
       catalog.scoped(input.workspaceId);
       return teamService().setNoteVisibility(v.uuid(input.noteId), v.uuid(input.spaceId, "space id"));
+    },
+    "team.people": (input) => {
+      v.object(input, ["workspaceId"]);
+      catalog.scoped(input.workspaceId);
+      return teamService().teamPeople();
+    },
+    "team.person": (input) => {
+      v.object(input, ["workspaceId", "name"]);
+      catalog.scoped(input.workspaceId);
+      return teamService().teamPerson(v.text(input.name, "name", 200));
     },
     "team.ledger": (input) => {
       v.object(input, ["workspaceId"]);

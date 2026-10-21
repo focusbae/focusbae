@@ -936,6 +936,11 @@ function App() {
           ) : page === "People" ? (
             <People
               key={`${workspace.id}:${personTarget ?? ""}`}
+              shared={shared}
+              openNote={(id) => {
+                setInitialNoteId(id);
+                setPage("Notes");
+              }}
               initialPersonId={personTarget}
               speakersReady={models ? !!models.diarization?.ready : undefined}
               setupModel={() => setModelDialog(true)}

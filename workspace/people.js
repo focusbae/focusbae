@@ -159,6 +159,7 @@ function get(store, workspaceId, id) {
   const pick = (test) => sorted.filter(test).map(item);
   return {
     person: summary(entry),
+    pages: pages(store, workspaceId, entry.name),
     theyOwe: pick(({ action, direction }) => direction === "theyOwe" && OPEN.has(action.status)),
     youOwe: pick(({ action, direction }) => direction === "youOwe" && OPEN.has(action.status)),
     review: pick(({ action }) => action.status === "proposed"),
@@ -216,4 +217,20 @@ function priorContext(store, workspaceId, recordingId) {
   return { items };
 }
 
-module.exports = { list, get, priorContext, personId, viewFor, normalizeName };
+// Pages that link to someone by name ([[Priya]]), newest first. Teammates' pages synced
+// here count too: the person can already read them. A page titled with the name is the
+// page about them, not a mention.
+function pages(store, workspaceId, name) {
+  store.getWorkspace({ workspaceId });
+  const wanted = require("./links").key(name);
+  return store._db.prepare(
+    `SELECT DISTINCT n.id, json_extract(n.data_json, '$.title') AS title, n.updated_at AS updatedAt,
+       json_extract(n.data_json, '$.team.authorName') AS authorName
+     FROM note_links l JOIN notes n ON n.id = l.note_id
+     WHERE l.workspace_id = ? AND l.target_key = ? AND n.deleted_at IS NULL
+       AND lower(trim(coalesce(json_extract(n.data_json, '$.title'), ''))) <> ?
+     ORDER BY n.updated_at DESC LIMIT 50`,
+  ).all(workspaceId, wanted, wanted);
+}
+
+module.exports = { list, get, pages, priorContext, personId, viewFor, normalizeName };

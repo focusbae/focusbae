@@ -252,6 +252,53 @@ class TeamService extends EventEmitter {
     return this.noteVisibility(noteId);
   }
 
+  // People on the team ledger, with what is open on them there. This Mac's own shared
+  // actions are left out: the People view already counts them from the local ledger.
+  teamPeople() {
+    const state = this.#activeState();
+    if (!state) return null;
+    try {
+      const me = state.binding().mePersonId;
+      const open = this.#teamOpen(state);
+      return state.people().filter((p) => p.id !== me).map((p) => ({
+        id: p.id, name: p.name, email: p.email, isMember: !!p.isMember,
+        owes: open.filter((c) => c.owner_person_id === p.id).length,
+        owed: open.filter((c) => c.counterparty_person_id === p.id && c.owner_person_id !== p.id).length,
+      }));
+    } finally {
+      state.close();
+    }
+  }
+
+  // Teammates' open promises involving one person, matched by name as [[links]] are.
+  teamPerson(name) {
+    const state = this.#activeState();
+    if (!state) return null;
+    try {
+      const key = require("../workspace/links").key;
+      const me = state.binding().mePersonId;
+      const person = state.people().find((p) => p.id !== me && key(p.name) === key(name));
+      if (!person) return null;
+      const names = new Map(state.people().map((p) => [p.id, p.id === me ? "You" : p.name]));
+      const open = this.#teamOpen(state);
+      const view = (c) => ({
+        id: c.id, title: c.title, status: c.status, dueDate: c.due_date, quote: c.quote, sourceTitle: c.source_title,
+        owner: names.get(c.owner_person_id) ?? null, counterparty: names.get(c.counterparty_person_id) ?? null,
+      });
+      return {
+        person: { id: person.id, name: person.name, email: person.email, isMember: !!person.isMember },
+        owes: open.filter((c) => c.owner_person_id === person.id).map(view),
+        owed: open.filter((c) => c.counterparty_person_id === person.id && c.owner_person_id !== person.id).map(view),
+      };
+    } finally {
+      state.close();
+    }
+  }
+
+  #teamOpen(state) {
+    return state.commitments().filter((c) => ["accepted", "deferred"].includes(c.status) && !state.sent(c.id));
+  }
+
   // The shared ledger of the open team workspace, for the Team view.
   ledger() {
     const state = this.#activeState();

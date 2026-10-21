@@ -316,7 +316,7 @@ test("a teammate's page arrives read-only under its team and folder, and is neve
   const page = store.get(ws(store), "note", remote.id);
   assert.equal(page.plainText, "Alice wrote this");
   assert.equal(page.folderId, specs.id);
-  assert.deepEqual(require("../../workspace/notebook").publicNote(page).team, { readOnly: true, authorName: "Alice", spaceName: "Eng" });
+  assert.deepEqual(require("../../workspace/notebook").publicNote(page).team, { readOnly: true, authorName: "Alice", spaceName: "Eng", arriving: false });
 
   assert.throws(() => store.updateNote(mutation(store, page.revision), page.id, { content: document("mine now") }), /teammate/);
   assert.throws(() => store.delete(mutation(store, page.revision), "note", page.id), /teammate/);
@@ -443,4 +443,59 @@ test("team people and their open promises come from the synced ledger, without t
   assert.deepEqual(alice.owes.map((c) => [c.title, c.owner, c.counterparty, c.sourceTitle]), [["Send the deck", "Alice", "You", "Standup"]]);
   assert.equal(alice.owed.length, 0);
   assert.equal(service.teamPerson("Nobody"), null);
+});
+
+test("a teammate's page handed to this person becomes theirs to edit here, and syncs as theirs", async (t) => {
+  const { store, state, server } = await setup(t);
+  await round(store, state, server);
+  const remote = server.teammate({ id: randomUUID(), title: "Runbook" });
+  await round(store, state, server);
+  assert.ok(store.get(ws(store), "note", remote.id).team, "read-only while it is Alice's");
+  Object.assign(server.notes.get(remote.id), { authorId: "u1", seq: ++server.seq }); // an admin hands it over
+  await round(store, state, server);
+  const mine = store.get(ws(store), "note", remote.id);
+  assert.equal(mine.team ?? null, null, "now an ordinary page");
+  assert.equal(state.mirrored(remote.id), null);
+  const calls = server.calls.length;
+  await round(store, state, server);
+  assert.deepEqual(server.calls.slice(calls), ["pull_changes"], "not pushed straight back");
+  store.updateNote(mutation(store, mine.revision), mine.id, { content: document("Edited by me") });
+  await round(store, state, server);
+  assert.equal(server.notes.get(remote.id).text, "Edited by me");
+});
+
+test("this person's page written elsewhere arrives editable once its files are here", async (t) => {
+  const { store, state, server } = await setup(t);
+  await round(store, state, server);
+  const id = randomUUID(), image = randomUUID();
+  server.teammate({ id, authorId: "u1", title: "From the web", content: imageDoc(image) });
+  await round(store, state, server);
+  assert.equal(require("../../workspace/notebook").publicNote(store.get(ws(store), "note", id)).team.arriving, true);
+  assert.throws(() => store.updateNote(mutation(store, store.get(ws(store), "note", id).revision), id, { title: "x" }), /teammate/);
+  server.teammateFile(id, image, PNG);
+  await round(store, state, server);
+  const page = store.get(ws(store), "note", id);
+  assert.equal(page.team ?? null, null);
+  assert.equal(page.content.content[1].attrs.id, image);
+});
+
+test("signing out erases teammates' copies and the team ledger, keeps own pages, and a sign-in brings them back", async (t) => {
+  const { store, state, server } = await setup(t);
+  const path = require("node:path");
+  const { EventEmitter } = require("node:events");
+  const { TeamService } = require("../../team/service");
+  await round(store, state, server);
+  const mine = store.createNote(mutation(store), { title: "Mine", content: document("my words") });
+  const theirs = server.teammate({ id: randomUUID(), title: "Theirs" });
+  await round(store, state, server);
+  const account = Object.assign(new EventEmitter(), { status: () => ({ connected: true }) });
+  const catalog = { store, root: path.dirname(store._directory), entries: [{ id: store.identity.id, directory: path.basename(store._directory) }], serialize: (fn) => fn() };
+  const service = new TeamService({ account, catalog, policy: Object.assign(new EventEmitter(), { allows: () => false }) });
+  account.status = () => ({ connected: false });
+  await service.eraseCopies();
+  assert.ok(store._raw("note", theirs.id).metadata.purgedAt, "the teammate's page is erased");
+  assert.equal(store.get(ws(store), "note", mine.id).plainText, "my words");
+  assert.deepEqual([state.mirroredIds(), state.remoteNotes(), state.binding().cursor], [[], [], 0]);
+  await round(store, state, server);
+  assert.equal(store.get(ws(store), "note", theirs.id).title, "Theirs", "signed in again, it is back");
 });

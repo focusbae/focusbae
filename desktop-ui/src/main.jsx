@@ -985,7 +985,15 @@ function App() {
             <HardDrive size={13} />
             {workspace.name}
           </span>
-          <span>{shared ? "Team pages sync when connected" : "Stored locally"}</span>
+          <span>
+            {!shared
+              ? "Stored locally"
+              : privacy.mode === "strict-local"
+                ? "Offline — Strict Local"
+                : shared.status === "removed"
+                  ? "You were removed from this team workspace"
+                  : "Team pages sync when connected"}
+          </span>
         </footer>
       </div>
       {creating && (

@@ -287,20 +287,22 @@ async function exchange(account, state, work) {
   return { ...pushed, pull, downloads };
 }
 
-// Teammates' pages as the team now holds them: what was stored before plus this pull.
-function teammatePages(state, pull) {
+// Pages the team holds that this Mac did not write: teammates' pages, and this person's
+// own pages written elsewhere (on the web, or handed to them when someone left). What
+// was stored before plus this pull.
+function pagesFromTeam(state, pull) {
   const me = state.binding().accountUserId;
   const visible = new Set(pull.visibleNoteIds ?? []);
   const pages = new Map(state.remoteNotes().map((n) => [n.id, n]));
   for (const n of pull.notes ?? []) pages.set(n.id, n);
-  return [...pages.values()].filter((n) => visible.has(n.id) && n.authorId !== me);
+  return [...pages.values()].filter((n) => visible.has(n.id) && n.authorId && (n.authorId !== me || !state.noteSent(n.id)));
 }
 
 // The files of teammates' pages that are not on this Mac yet, within this round's
 // memory budget. A file that fails to arrive is asked for again next round.
 async function downloadFiles(account, state, pull, errors) {
   const wanted = new Map();
-  for (const page of teammatePages(state, pull)) {
+  for (const page of pagesFromTeam(state, pull)) {
     let ids = [];
     try { ids = require("../workspace/content").attachmentIds(page.content); } catch { continue; }
     for (const id of ids) if (!state.attachmentMirrored(id)) wanted.set(`${page.id}/${id}`, { noteId: page.id, id });
@@ -336,9 +338,16 @@ function mirrorPages(store, state, result) {
   for (const d of result.downloads ?? []) files.set(d.noteId, [...(files.get(d.noteId) ?? []), d]);
   const live = new Set();
   let changed = false, dropped = false;
-  for (const remote of teammatePages(state, result.pull)) {
+  const me = state.binding().accountUserId;
+  for (const remote of pagesFromTeam(state, result.pull)) {
     const local = store._raw("note", remote.id);
     if (local && !local.team) continue; // never overwrite a page of this person's own
+    if (remote.authorId === me) {
+      const outcome = adoptPage(store, state, remote, files.get(remote.id) ?? [], result.errors);
+      if (outcome === "waiting") live.add(remote.id); // read-only until its files arrive
+      if (outcome) changed = true;
+      continue;
+    }
     live.add(remote.id);
     const team = { authorPersonId: remote.authorPersonId ?? null, authorName: people.get(remote.authorPersonId) ?? null,
       spaceId: remote.spaceId, spaceName: spaces.get(remote.spaceId)?.name ?? null, access: remote.access ?? "view" };
@@ -446,6 +455,38 @@ function apply(store, state, result) {
   }
   if (result.errors.length) state.recordError(result.errors[0]);
   return { removed: false, applied, notesChanged: notesChanged || foldersChanged || mirrors.changed, dropped: mirrors.dropped };
+}
+
+// This person's own page from elsewhere becomes an ordinary, editable page here, with
+// the server's version recorded as sent so it is not pushed straight back. It waits
+// until all its files are here: an edit to a page missing an image would remove that
+// image for everyone.
+function adoptPage(store, state, remote, arrived, errors) {
+  try {
+    return store._db.transaction(() => {
+      const placement = { id: remote.id, title: remote.title ?? "", content: remote.content, team: null,
+        folderId: remote.folderId && store._raw("folder", remote.folderId)?.deletedAt === null ? remote.folderId : state.rootForSpace(remote.spaceId) };
+      // Files need their page to exist, so it is held read-only while they download.
+      if (!store._raw("note", remote.id)) store._mirrorNote({ ...placement, team: { arriving: true } });
+      for (const file of arrived) store._mirrorAttachment(remote.id, file, file.bytes);
+      const ids = require("../workspace/content").attachmentIds(remote.content);
+      if (ids.some((id) => !arrived.some((f) => f.id === id) && !state.attachmentMirrored(id))) {
+        for (const file of arrived) state.markAttachmentMirrored(file.id, remote.id);
+        state.markMirrored(remote.id, remote.version, false);
+        return "waiting";
+      }
+      store._mirrorNote(placement);
+      const note = store._raw("note", remote.id);
+      const where = folders.location(store, state, note.folderId);
+      state.markNoteSent(remote.id, hashOf({ ...where, title: note.title, content: note.content, text: note.plainText }), remote.version);
+      state.forgetMirrored(remote.id);
+      return "adopted";
+    })();
+  } catch (error) {
+    if (!error.code || error.code.startsWith("SQLITE")) throw error;
+    errors.push(`"${remote.title || "Untitled page"}" could not be added to this Mac: ${error.message}`);
+    return store._raw("note", remote.id) ? "waiting" : null;
+  }
 }
 
 // Cursor and mappings commit only after all local changes succeed. A failed local

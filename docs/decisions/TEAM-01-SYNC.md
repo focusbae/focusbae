@@ -115,6 +115,17 @@ are never sent back. Their files download after the pull, within the same 120 MB
 budget, and the page shows without a file until it arrives. A page the person can no
 longer see, and every copy on removal from the workspace, is erased (words and files),
 not moved to Trash. A page this Mac cannot read is reported without stopping the rest.
+
+The person's own pages that this Mac did not write (written on the web, or handed to
+them by an admin when a teammate left) become ordinary editable pages here, with the
+server version recorded as sent so they are not pushed straight back. Such a page waits,
+read-only and labelled as arriving, until all its files are here: an edit to a page
+missing an image would remove that image for everyone.
+
+Signing out erases teammates' copies, their files and the team ledger from every team
+workspace on this Mac (closed ones are opened briefly), keeps the person's own pages and
+folders, and resets the cursor so signing in again pulls everything back. The same runs
+at start-up if the app quit while signed out.
 Until co-editing, only the author changes a note's content; teammates read and comment
 on the web, and the author or an admin can share it with another team or a guest. Notes
 use the same version guard as commitments. The web renders the stored TipTap JSON with
@@ -131,6 +142,5 @@ round holds at most 120 MB of uploads in memory; the rest go in later rounds.
 
 - Sync only runs for the open workspace; background sync of other team workspaces.
 - Team spaces other than "everyone" from the Mac (choose the team when accepting).
-- The person's own pages written on the web do not come to the Mac yet.
 - Applying another Mac's edits to the same authored page. Snapshot conflicts remain guarded until co-editing.
 - Co-editing with Yjs (TEAM_PLAN weeks 7–8), which replaces author-only snapshots.

@@ -200,6 +200,14 @@ class TeamState {
     this.db.prepare("DELETE FROM mirrored WHERE note_id = ?").run(noteId);
     this.db.prepare("DELETE FROM mirrored_attachments WHERE note_id = ?").run(noteId);
   }
+  // Signing out: forget every teammate copy and the team ledger, and pull from the start
+  // on the next sign-in. What this Mac sent of its own work is kept, so nothing resends.
+  forgetTeamCopies() {
+    this.db.transaction(() => {
+      for (const table of ["mirrored", "mirrored_attachments", "remote_notes", "commitments"]) this.db.prepare(`DELETE FROM ${table}`).run();
+      this.db.prepare("UPDATE binding SET cursor = 0").run();
+    })();
+  }
   mirroredIds() { return this.db.prepare("SELECT note_id FROM mirrored").all().map((row) => row.note_id); }
   attachmentMirrored(attachmentId) { return !!this.db.prepare("SELECT 1 FROM mirrored_attachments WHERE attachment_id = ?").get(attachmentId); }
   markAttachmentMirrored(attachmentId, noteId) {

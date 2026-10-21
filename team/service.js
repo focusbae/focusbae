@@ -21,11 +21,48 @@ class TeamService extends EventEmitter {
     this.debounce = null;
     this.running = null;
     this.lastResult = null;
-    account.on("change", () => { this.emit("change"); this.#schedule(); });
+    account.on("change", () => {
+      if (!account.status().connected) this.eraseCopies().catch(() => {});
+      this.emit("change");
+      this.#schedule();
+    });
     policy.on("change", () => this.#schedule());
   }
 
-  start() { this.#schedule(); }
+  start() {
+    // A Mac that quit while signed out, or before an erase finished, catches up now.
+    if (!this.account.status().connected) this.eraseCopies().catch(() => {});
+    this.#schedule();
+  }
+
+  // Signed out: teammates' pages, their files and the team ledger leave this Mac; the
+  // person's own pages and folders stay. Signing in again brings the copies back
+  // (TEAM_PLAN §6.8). Closed workspaces are opened just long enough to do it.
+  eraseCopies() {
+    return this.catalog.serialize(async () => {
+      const { openWorkspace } = require("../workspace");
+      for (const entry of this.catalog.entries) {
+        const directory = this.#directory(entry);
+        if (!TeamState.exists(directory)) continue;
+        const state = new TeamState(directory);
+        try {
+          if (!state.mirroredIds().length && !state.binding().cursor) continue;
+          const active = this.catalog.store?.identity.id === entry.id;
+          const store = active ? this.catalog.store : await openWorkspace({ directory });
+          try {
+            store._db.transaction(() => { for (const id of state.mirroredIds()) store._dropMirror(id); })();
+            state.forgetTeamCopies();
+            require("../workspace/attachments").reconcile(store);
+          } finally {
+            if (!active) store.close();
+          }
+        } finally {
+          state.close();
+        }
+      }
+      this.emit("notes-changed");
+    });
+  }
 
   stop() {
     clearInterval(this.timer); clearTimeout(this.debounce);

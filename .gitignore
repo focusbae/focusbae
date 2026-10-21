@@ -91,3 +91,4 @@ stats_backup.json
 /local-ai/fluid-helpers/.build/
 /qualification/speech/data/
 /qualification/speech/results/
+/qualification/speech/.venv/

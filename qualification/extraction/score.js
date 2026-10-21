@@ -65,6 +65,9 @@ const EXTRACTORS = {
   "claude-me": (meeting) => asMe(meeting, (m) => cloud.extract("anthropic", m, usage)),
   openai: (meeting) => cloudOwners(meeting, (m) => cloud.extract("openai", m, usage)),
   "openai-me": (meeting) => asMe(meeting, (m) => cloud.extract("openai", m, usage)),
+  // An open model on this Mac (Qwen through Ollama), as open-source note-takers do.
+  qwen: (meeting) => cloudOwners(meeting, (m) => cloud.extract("ollama", m, usage)),
+  "qwen-me": (meeting) => asMe(meeting, (m) => cloud.extract("ollama", m, usage)),
 };
 
 const cloud = require("./cloud");

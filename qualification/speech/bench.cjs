@@ -92,10 +92,42 @@ const ENGINES = {
       return { text: body.text ?? "", ms, rssMb: 0 };
     },
   },
+  // Qwen3-ASR 0.6B on this Mac through MLX (what OpenOats ships). One long-lived worker
+  // keeps the model loaded, as the app's helpers do; set up with
+  //   python3 -m venv qualification/speech/.venv && qualification/speech/.venv/bin/pip install mlx-qwen3-asr
+  "qwen3-asr": {
+    languages: ["en", "hi", "mixed"],
+    async run(item) {
+      const worker = await qwenWorker();
+      const language = { en: "English", hi: "Hindi", mixed: null }[item.lang];
+      const out = await worker.ask({ file: item.file, language });
+      if (out.error) throw new Error(`qwen3-asr: ${out.error}`);
+      return { text: out.text, ms: out.ms, rssMb: 0 };
+    },
+  },
   apple: appleEngine({ en: "en-US", hi: "hi-IN", mixed: "hi-IN" }),
   // Indian English locale, for Indian-accented English and code-mixed speech.
   "apple-en-in": appleEngine({ en: "en-IN", mixed: "en-IN" }),
 };
+let qwen = null;
+function qwenWorker() {
+  if (qwen) return qwen;
+  const { spawn } = require("node:child_process");
+  const readline = require("node:readline");
+  const child = spawn(path.join(__dirname, ".venv/bin/python"), [path.join(__dirname, "qwen_asr_worker.py")], { stdio: ["pipe", "pipe", "inherit"] });
+  const lines = readline.createInterface({ input: child.stdout });
+  const waiting = [];
+  lines.on("line", (line) => waiting.shift()?.(JSON.parse(line)));
+  qwen = new Promise((resolve, reject) => {
+    child.once("error", reject);
+    waiting.push(() => resolve({
+      ask: (request) => new Promise((answer) => { waiting.push(answer); child.stdin.write(JSON.stringify(request) + "\n"); }),
+      close: () => child.stdin.end(),
+    }));
+  });
+  return qwen;
+}
+
 function appleEngine(locales) {
   return {
     languages: Object.keys(locales),
@@ -209,6 +241,7 @@ async function main() {
       process.stderr.write(`${engine} ${item.set}/${item.id} ${record.error ? "ERROR " + record.error : Math.round(record.ms) + "ms"}\n`);
     }
   }
+  if (qwen) (await qwen).close();
   report(manifest);
 }
 

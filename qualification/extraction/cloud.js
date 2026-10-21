@@ -5,6 +5,8 @@
 // backup (owner, 2026-10-21). Keys and model names come from the environment:
 //   ANTHROPIC_API_KEY, ANTHROPIC_MODEL (default claude-sonnet-5-5)
 //   OPENAI_API_KEY, OPENAI_MODEL (default gpt-6.1-sol; list with: node cloud.js --models openai)
+// "ollama" is not a cloud: an open model on this Mac through a local Ollama server,
+// the way open-source note-takers run Qwen (OLLAMA_MODEL, default qwen3.5:4b).
 // Only the benchmark's own transcripts are sent. The app does not use this file.
 
 // Keys live in qualification/.env (git-ignored; this repository is public).
@@ -100,6 +102,34 @@ const PROVIDERS = {
       const content = json.choices?.[0]?.message?.content;
       if (!content) throw new Error("openai: no structured answer");
       return { commitments: JSON.parse(content).commitments, usage: { input: json.usage.prompt_tokens, output: json.usage.completion_tokens } };
+    },
+  },
+  ollama: {
+    model: () => process.env.OLLAMA_MODEL || "qwen3.5:4b",
+    async extract(meeting) {
+      const chat = (format, system) => post(`${process.env.OLLAMA_HOST || "http://127.0.0.1:11434"}/api/chat`, {}, {
+        model: this.model(), stream: false, think: false, options: { temperature: 0 }, ...(format ? { format } : {}),
+        messages: [{ role: "system", content: system }, { role: "user", content: prompt(meeting) }],
+      });
+      let json, constrained = true;
+      try {
+        json = await chat(SCHEMA, INSTRUCTIONS);
+      } catch (error) {
+        // Some models cannot be held to a schema by Ollama; then the schema is stated
+        // in the instructions and the first JSON object in the answer is read.
+        if (!/structured output is unavailable/.test(error.message)) throw error;
+        constrained = false;
+        json = await chat(null, `${INSTRUCTIONS}\n\nAnswer with only a JSON object matching this JSON schema, and nothing else:\n${JSON.stringify(SCHEMA)}`);
+      }
+      const text = json.message.content;
+      const body = constrained ? text : text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1);
+      let parsed;
+      try { parsed = JSON.parse(body); } catch { throw new Error(`ollama: answer was not JSON: ${text.slice(0, 120)}`); }
+      // Small models sometimes copy the transcript's "[s2]" markers into the id.
+      const commitments = (Array.isArray(parsed.commitments) ? parsed.commitments : [])
+        .map((c) => ({ ...c, segmentId: String(c.segmentId ?? "").replace(/^\[|\]$/g, "") }));
+      return { commitments,
+        usage: { input: json.prompt_eval_count ?? 0, output: json.eval_count ?? 0 } };
     },
   },
 };

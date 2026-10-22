@@ -55,6 +55,9 @@ function publicRecording(record) {
     microphones: record.metadata?.microphones ?? [],
     // "cloud" when the person chose Deepgram (level 3) for this recording; the badge.
     processing: record.metadata?.processing ?? "local",
+    // Team workspaces: the team that sees action items accepted from this recording;
+    // null is Only me (TEAM_PLAN §4).
+    shareWith: record.metadata?.teamSpaceId ?? null,
     processingNote: record.metadata?.processingNote ?? null,
     aiState: record.aiState,
   };
@@ -120,6 +123,9 @@ class RecordingService extends EventEmitter {
     cloudSpeech = null,
     // (store) => null, or a commitment extractor using OpenAI (level 2 or higher).
     cloudAI = null,
+    // (store) => null, or { privateSpaceId, options } in a team workspace: the teams a
+    // recording's accepted action items can be shared with.
+    teamSpaces = null,
     legacyBusy = () => false,
     clock = () => performance.now(),
     startTimeout = 15000,
@@ -155,6 +161,7 @@ class RecordingService extends EventEmitter {
       speech,
       cloudSpeech,
       cloudAI,
+      teamSpaces,
     });
     // Readiness is per recording language; see recording/speech.js for routing.
     this.model =
@@ -199,6 +206,23 @@ class RecordingService extends EventEmitter {
       { ...changes, metadata: { ...old.metadata, ...changes.metadata } },
     );
   }
+  // Validates a "Share with" choice: null, My notes and a team the person can add to.
+  // My notes is stored as null, so it never depends on that space's id.
+  teamSpace(store, value) {
+    if (value == null) return null;
+    const id = v.uuid(value, "team");
+    const targets = this.teamSpaces?.(store);
+    check(targets?.options.some((s) => s.id === id), "INVALID_INPUT", "You can't share with that team");
+    return id === targets.privateSpaceId ? null : id;
+  }
+  // Changing it later moves the recording's shared action items with it on the next sync.
+  setShareWith(workspaceId, id, value) {
+    const store = this.catalog.scoped(workspaceId);
+    const teamSpaceId = this.teamSpace(store, value);
+    const saved = this.update({ store, id: v.uuid(id) }, { metadata: { teamSpaceId } });
+    this.emitChange();
+    return publicRecording(saved);
+  }
   start(input) {
     v.object(input, [
       "context",
@@ -210,6 +234,7 @@ class RecordingService extends EventEmitter {
       "keepAudio",
       "microphone",
       "processing",
+      "shareWith",
     ]);
     const store = this.catalog.scoped(input.context.workspaceId);
     // The microphone chosen in the record dialog, by name; null follows the Mac's
@@ -235,6 +260,7 @@ class RecordingService extends EventEmitter {
       "CONSENT_REQUIRED",
       "Confirm participant consent and temporary local audio storage",
     );
+    const teamSpaceId = this.teamSpace(store, input.shareWith);
     v.object(input.destination, ["kind", "noteId"]);
     v.choice(
       input.destination.kind,
@@ -282,7 +308,7 @@ class RecordingService extends EventEmitter {
           retainedAudio: keepAudio,
           participantConsent: true,
         },
-        metadata: { localCaptureVersion: 1, language: input.language, processing },
+        metadata: { localCaptureVersion: 1, language: input.language, processing, teamSpaceId },
       });
       const noteId =
         input.destination.kind === "today"
@@ -342,7 +368,7 @@ class RecordingService extends EventEmitter {
     return publicRecording(recording);
   }
   validateImport(input) {
-    v.object(input, ["context", "purpose", "destination", "language", "keepAudio", "consent"]);
+    v.object(input, ["context", "purpose", "destination", "language", "keepAudio", "consent", "shareWith"]);
     const store = this.catalog.scoped(input.context.workspaceId);
     v.choice(input.purpose, ["conversation", "personal", "learning"], "purpose");
     v.choice(input.language, ["english", "hindi", "mixed"], "language");
@@ -353,6 +379,7 @@ class RecordingService extends EventEmitter {
     if (input.destination.kind === "note")
       store.get(scope(store), "note", v.uuid(input.destination.noteId));
     else check(input.destination.noteId === undefined, "INVALID_INPUT", "Unexpected note ID");
+    this.teamSpace(store, input.shareWith);
     return store;
   }
   guardImport() {
@@ -378,7 +405,8 @@ class RecordingService extends EventEmitter {
         sourceMode: "microphone",
         keepAudio,
         consent: { version: 1, acknowledgedAt: new Date().toISOString(), importedAudio: true },
-        metadata: { localCaptureVersion: 1, importedWavVersion: 1, language: input.language, originalName: displayName },
+        metadata: { localCaptureVersion: 1, importedWavVersion: 1, language: input.language, originalName: displayName,
+          teamSpaceId: this.teamSpace(store, input.shareWith) },
       });
       const noteId = input.destination.kind === "today"
         ? store.dailyNote(mutation(store)).id : input.destination.noteId;

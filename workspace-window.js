@@ -143,6 +143,7 @@ function initialize({ privacy, busy, desktopSettings, onRecordingChange = () => 
     // up below and is only read when a recording starts or is transcribed.
     cloudSpeech: (store) => team?.cloudSpeech(store) ?? null,
     cloudAI: (store) => team?.cloudAI(store) ?? null,
+    teamSpaces: (store) => team?.shareTargets(store) ?? null,
   });
   const { ModelManager } = require("./recording/model-manager");
   models = new ModelManager({

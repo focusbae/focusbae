@@ -160,6 +160,14 @@
   border-bottom: 1px solid var(--line);
 }
 .recording-original { overflow-wrap: anywhere; }
+.recording-facts .recording-share {
+  font: inherit;
+  color: var(--text, inherit);
+  padding: 0 4px;
+  min-height: 0;
+  height: auto;
+  max-width: 220px;
+}
 .recording-warning {
   font-size: 12px;
   border-left: 2px solid #b9767e;

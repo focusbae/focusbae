@@ -153,9 +153,30 @@ Settings > Team workspaces, says what to do next and highlights that workspace. 
 connects, sends or changes anything by itself: the person still clicks Connect and Add.
 The release config, its test and the packaging audit allow this scheme and no other.
 
+## Where an action goes, and duplicates (owner, 2026-10-22)
+
+Researched against Granola (notes private in My notes until added to a team folder; it
+offers to auto-add later instances of a recurring meeting) and Fireflies (admins set a
+workspace default from "only me" to "teammates", changeable per meeting).
+
+- **Share with**, per recording: Only me (default, never carried over from the last
+  recording, so a private call is not shared by habit) or a team the person can add to.
+  Recording into an existing team page defaults to that page's team. It can be changed
+  later on the recording; its shared actions move on the next sync.
+- An action's home is its source: the recording's choice, or the page it was quoted
+  from. Typed actions and anything whose team the person can no longer add to go to My
+  notes, where the server shows them only to the author and the people the action names.
+  Before the first pull names My notes, nothing is shared (no guessed team). Previously
+  every action went to "everyone".
+- **Duplicates** (two people record the same meeting): before an action is shared for
+  the first time, the Mac compares it with teammates' open commitments using the
+  restatement rule (same owner, most content words, dates ignored). A likely match is
+  held back until the person chooses "Use theirs" (kept on this Mac, linked: status
+  changes go both ways, never echoed) or "Share mine too". Merging whole meetings would
+  need calendar matching and is not done.
+
 ## Open
 
 - Sync only runs for the open workspace; background sync of other team workspaces.
-- Team spaces other than "everyone" from the Mac (choose the team when accepting).
 - Applying another Mac's edits to the same authored page. Snapshot conflicts remain guarded until co-editing.
 - Co-editing with Yjs (TEAM_PLAN weeks 7–8), which replaces author-only snapshots.

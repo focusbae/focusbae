@@ -17,11 +17,14 @@ export function TeamShare({ workspaceId, actionId, status, teamName, disabled })
   useEffect(() => {
     let alive = true;
     setValue(null);
-    unwrap(api.team.mapping({ workspaceId, actionId }))
+    const load = () => unwrap(api.team.mapping({ workspaceId, actionId }))
       .then((next) => alive && setValue(next))
       .catch((failure) => alive && setError(failure.message));
-    return () => { alive = false; };
-  }, [workspaceId, actionId]);
+    load();
+    // A sync can find that a teammate already shared this; show it when it does.
+    const off = api.onTeam(load);
+    return () => { alive = false; off(); };
+  }, [workspaceId, actionId, status]);
 
   if (!value) return error ? <p className="action-error" role="alert">{error}</p> : null;
 
@@ -58,12 +61,42 @@ export function TeamShare({ workspaceId, actionId, status, teamName, disabled })
     </>
   );
   const busy = disabled || saving;
+  const decide = async (decision) => {
+    setSaving(true);
+    setError(null);
+    try { setValue(await unwrap(api.team.resolveDuplicate({ workspaceId, actionId, decision }))); }
+    catch (failure) { setError(failure.message); }
+    finally { setSaving(false); }
+  };
+  const where = !value.space ? teamName
+    : value.space.kind === "private" ? null
+    : value.space.kind === "everyone" ? `everyone at ${value.space.name}` : value.space.name;
+  const dup = value.duplicate;
 
   return (
     <fieldset className="team-share" disabled={busy}>
       <legend>
-        {status === "proposed" ? `Shared with ${teamName} when accepted, as` : `Shared with ${teamName} as`}
+        {!where ? (status === "proposed" ? "Kept in My notes when accepted, as" : "In My notes, as")
+          : status === "proposed" ? `Shared with ${where} when accepted, as` : `Shared with ${where} as`}
       </legend>
+      {dup?.decision === "pending" && (
+        <div className="team-duplicate" role="status">
+          <p><strong>Already on the team?</strong> {dup.commitment.owner ?? "Someone"}: “{dup.commitment.title}”
+            {dup.commitment.space ? ` · ${dup.commitment.space}` : ""}{dup.commitment.sourceTitle ? ` · from ${dup.commitment.sourceTitle}` : ""}</p>
+          <p className="muted">This one isn't shared until you choose, so the team doesn't see it twice.</p>
+          <div className="team-duplicate-actions">
+            <button type="button" className="primary" onClick={() => decide("theirs")}>Use theirs</button>
+            <button type="button" onClick={() => decide("both")}>Share mine too</button>
+          </div>
+        </div>
+      )}
+      {dup?.decision === "theirs" && (
+        <div className="team-duplicate" role="status">
+          <p>Linked to the team's copy: “{dup.commitment.title}”.</p>
+          <p className="muted">{dup.canFollow ? "Marking this done or deferred here updates theirs, and their changes reach this one." : "Their changes reach this one; yours stay on this Mac."}</p>
+          <div className="team-duplicate-actions"><button type="button" onClick={() => decide("both")}>Share mine separately</button></div>
+        </div>
+      )}
       <div className="team-share-row">
         <label>
           <span>Owner</span>

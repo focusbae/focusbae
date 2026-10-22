@@ -943,3 +943,29 @@ test("cloud AI (level 2) finds commitments in the transcript text, and this Mac 
   assert.match(fallback.recording.processingNote, /Cloud AI didn't finish, so this Mac found the commitments/);
   assert.equal(fallback.recording.aiState, "complete");
 });
+
+test("Share with: a recording keeps the team chosen for it, Only me by default", async (t) => {
+  const targets = { privateSpaceId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", options: [
+    { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", kind: "private", name: "My notes" },
+    { id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", kind: "custom", name: "Sales" },
+  ] };
+  const f = await fixture(t, { teamSpaces: () => targets });
+  f.modelReady();
+  const plain = f.service.start(f.input());
+  assert.equal(plain.shareWith, null, "Only me unless chosen");
+  await f.service.stop(plain.id);
+  await until(() => !f.service.busy());
+  assert.throws(() => f.service.start(f.input({ shareWith: "cccccccc-cccc-4ccc-8ccc-cccccccccccc" })), /can't share with that team/);
+  const sales = f.service.start(f.input({ shareWith: targets.options[1].id }));
+  assert.equal(sales.shareWith, targets.options[1].id);
+  await f.service.stop(sales.id);
+  await until(() => !f.service.busy());
+  const moved = f.service.setShareWith(plain.workspaceId, plain.id, targets.privateSpaceId);
+  assert.equal(moved.shareWith, null, "My notes is stored as Only me");
+  assert.equal(f.service.setShareWith(plain.workspaceId, plain.id, targets.options[1].id).shareWith, targets.options[1].id);
+});
+
+test("Share with is refused outside team workspaces", async (t) => {
+  const f = await fixture(t);
+  assert.throws(() => f.service.start(f.input({ shareWith: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" })), /can't share with that team/);
+});

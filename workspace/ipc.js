@@ -95,6 +95,8 @@ const CHANNELS = [
   "capture.discard",
   "capture.move",
   "capture.cloud",
+  "capture.shareTargets",
+  "capture.shareWith",
   "capture.identifySpeaker",
   "capture.playbackInfo",
   "capture.playbackRead",
@@ -119,6 +121,7 @@ const CHANNELS = [
   "team.ledger",
   "team.mapping",
   "team.setMapping",
+  "team.resolveDuplicate",
   "team.noteVisibility",
   "team.setNoteVisibility",
   "team.people",
@@ -410,6 +413,17 @@ function registerWorkspaceIPC({
       const store = catalog.scoped(input.workspaceId);
       // speech: Deepgram transcription (level 3); ai: OpenAI finds commitments (level 2+).
       return { speech: !!recording.cloudSpeech?.(store), ai: !!recording.cloudAI?.(store) };
+    },
+    // Team workspaces: who a recording's accepted action items are shared with.
+    "capture.shareTargets": (input) => {
+      v.object(input, ["workspaceId"]);
+      return recording.teamSpaces?.(catalog.scoped(input.workspaceId)) ?? null;
+    },
+    "capture.shareWith": (input) => {
+      v.object(input, ["workspaceId", "id", "spaceId"]);
+      const saved = recording.setShareWith(input.workspaceId, input.id, input.spaceId ?? null);
+      emit("actions.changed");
+      return saved;
     },
     "capture.storage": (input) => {
       v.object(input, ["workspaceId"]);
@@ -1146,6 +1160,11 @@ function registerWorkspaceIPC({
         ownerPersonId: person(input.ownerPersonId),
         counterpartyPersonId: person(input.counterpartyPersonId),
       });
+    },
+    "team.resolveDuplicate": (input) => {
+      v.object(input, ["workspaceId", "actionId", "decision"]);
+      catalog.scoped(input.workspaceId);
+      return teamService().resolveDuplicate(v.uuid(input.actionId), v.choice(input.decision, ["theirs", "both"], "decision"));
     },
     "team.noteVisibility": (input) => {
       v.object(input, ["workspaceId", "noteId"]);

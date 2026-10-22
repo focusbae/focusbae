@@ -15,7 +15,7 @@ global.workspaceProbe.seedTeam = () => {
       const engId = '44444444-4444-4444-8444-444444444444';
       state.applyPull({ cursor: 0, workspace: { name: 'Acme Studio', role: 'admin', processingLevelMax: 1 }, me: { personId: 'me' },
         spaces: [{ id: privateId, kind: 'private', name: 'My notes', role: 'editor' }, { id: engId, kind: 'custom', name: 'Engineering', role: 'editor' }],
-        people: [{ id: '77777777-7777-4777-8777-777777777777', name: 'Priya', email: 'priya@acme.studio', isMember: true }],
+        people: [{ id: '77777777-7777-4777-8777-777777777777', name: 'Priya', email: 'priya@acme.studio', isMember: true }, { id: '88888888-8888-4888-8888-888888888888', name: 'Raghav', email: 'raghav@acme.studio', isMember: true }],
         commitments: [{ id: '88888888-8888-4888-8888-888888888888', version: 1, title: 'Share the revised plan', status: 'accepted',
           owner_person_id: '77777777-7777-4777-8777-777777777777', counterparty_person_id: 'me', due_date: '2026-10-23',
           quote: "I'll share the revised plan on Thursday", source_title: 'Acme kickoff' }],

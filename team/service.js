@@ -202,7 +202,11 @@ class TeamService extends EventEmitter {
         const shared = sync.sharedPeople(store, workspaceId, action, state);
         const me = state.binding().mePersonId;
         const id = (who) => (who?.self ? me : who?.personId ?? null);
+        const home = state.privateSpaceId() ? state.space(sync.payloadFor(store, workspaceId, action, state).spaceId) : null;
         return {
+          // Where the team sees it: a team, or My notes (only the people it names).
+          space: home && { id: home.id, kind: home.kind, name: home.name },
+          duplicate: this.#duplicate(state, actionId),
           people: state.people(),
           me,
           ownerPersonId: id(shared.owner),
@@ -215,6 +219,43 @@ class TeamService extends EventEmitter {
         state.close();
       }
     });
+  }
+
+  // A teammate's open copy this action seems to repeat, and what the person decided.
+  #duplicate(state, actionId) {
+    const dup = state.duplicate(actionId);
+    const theirs = dup && dup.decision !== "both" ? state.commitment(dup.commitmentId) : null;
+    if (!theirs) return null;
+    const people = new Map(state.people().map((p) => [p.id, p.name]));
+    return {
+      decision: dup.decision,
+      canFollow: !!theirs.rights,
+      commitment: {
+        id: theirs.id, title: theirs.title, status: theirs.status, dueDate: theirs.due_date ?? null,
+        owner: people.get(theirs.owner_person_id) ?? null, sourceTitle: theirs.source_title ?? null,
+        space: state.space(theirs.space_id)?.name ?? null,
+      },
+    };
+  }
+
+  // "theirs": keep this action on this Mac, linked to the teammate's copy; "both": share
+  // it anyway. Either way the next sync acts on it.
+  async resolveDuplicate(actionId, decision) {
+    await this.catalog.serialize(async () => {
+      const state = this.#activeState();
+      if (!state) throw fail("NOT_FOUND", "This is not a team workspace");
+      try {
+        const store = this.catalog.store;
+        const action = store.get({ workspaceId: store.identity.id }, "action", actionId);
+        const dup = state.duplicate(actionId);
+        if (!dup || !state.commitment(dup.commitmentId)) throw fail("NOT_FOUND", "That copy is no longer on the team");
+        state.setDuplicate(actionId, dup.commitmentId, decision, decision === "theirs" ? action.status : null);
+      } finally {
+        state.close();
+      }
+    });
+    this.localChanged();
+    return this.mapping(actionId);
   }
 
   async setMapping(actionId, mapping) {
@@ -240,6 +281,22 @@ class TeamService extends EventEmitter {
   cloudSpeech(store) {
     const binding = this.#cloudBinding(store, 3);
     return binding && { policy: this.policy, token: () => this.account.speechToken(binding.serverWorkspaceId) };
+  }
+
+  // The teams a recording here can share its accepted action items with: My notes plus
+  // every team this person can add to. Choosing one is local; nothing is sent until sync.
+  // null outside team workspaces, after removal, or before the first sync.
+  shareTargets(store) {
+    if (!store || !TeamState.exists(store._directory)) return null;
+    const state = new TeamState(store._directory);
+    try {
+      const binding = state.binding();
+      const privateSpaceId = state.privateSpaceId();
+      if (!binding || binding.status === "removed" || !privateSpaceId) return null;
+      return { privateSpaceId, options: state.spaces().filter((s) => s.role === "editor").map((s) => ({ id: s.id, kind: s.kind, name: s.name })) };
+    } finally {
+      state.close();
+    }
   }
 
   // Cloud AI on transcript text (level 2), under the same conditions as cloudSpeech but

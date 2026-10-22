@@ -8,6 +8,13 @@ const sync = require("../../team/sync");
 const { LocalPolicy } = require("../../privacy/local-policy");
 
 const SERVER_WS = "11111111-1111-4111-8111-111111111111";
+// My notes, everyone, a team this person is in, and one they can only read.
+const SPACES = [
+  { id: "s0", kind: "private", name: "My notes", role: "editor" },
+  { id: "s1", kind: "everyone", name: "Acme", role: "editor" },
+  { id: "s2", kind: "custom", name: "Sales", role: "editor" },
+  { id: "s3", kind: "custom", name: "Board", role: "viewer" },
+];
 
 // An in-memory stand-in for the team service's database functions, enough to check
 // what the Mac sends and how it applies what comes back.
@@ -41,13 +48,25 @@ class FakeServer {
         cursor: this.seq,
         workspace: { name: "Acme", role: "member", processingLevelMax: 1 },
         me: { personId: this.me },
-        spaces: [{ id: "s1", kind: "everyone", name: "Acme", role: "editor" }],
+        spaces: SPACES,
         people: this.people,
-        commitments: live.filter((r) => r.seq > args.p_since).map((r) => ({ id: r.id, title: r.title, status: r.status, version: r.version })),
+        commitments: live.filter((r) => r.seq > args.p_since).map((r) => ({ id: r.id, title: r.title, status: r.status, version: r.version,
+          space_id: r.spaceId, owner_person_id: this.personOf(r.owner), rights: "edit" })),
         visibleCommitmentIds: live.map((r) => r.id),
       };
     }
     throw new Error(`unexpected ${name}`);
+  }
+  personOf(owner) {
+    if (!owner) return null;
+    if (owner.self) return this.me;
+    return owner.personId ?? this.people.find((p) => p.name.toLowerCase() === owner.name?.toLowerCase())?.id ?? null;
+  }
+  // A teammate shares their own copy from their Mac.
+  teammateShares(title, ownerPersonId) {
+    const id = require("node:crypto").randomUUID();
+    this.rows.set(id, { id, title, status: "accepted", owner: { personId: ownerPersonId }, spaceId: "s1", version: 1, seq: ++this.seq, deleted: false });
+    return id;
   }
   // A teammate (or the web) changes status.
   teammateSets(id, status) {
@@ -66,7 +85,10 @@ async function setup(t) {
   const { store, directory } = await fixture(t);
   const state = TeamState.create(directory, { serverWorkspaceId: SERVER_WS, accountUserId: "u1", name: "Acme" });
   t.after(() => state.close());
-  return { store, state, server: new FakeServer() };
+  const server = new FakeServer();
+  // The first pull says which space is My notes; nothing is shared before it.
+  await round(store, state, server);
+  return { store, state, server };
 }
 
 const accepted = (store, title) => store.createAction(mutation(store), { title });
@@ -182,6 +204,7 @@ async function callWithPriya(store) {
     evidence: [{ segmentId: segment.id, revision: segment.revision, quote: segment.text, startOffset: 0, endOffset: segment.text.length }],
   });
   return {
+    recording,
     mine: propose(mine, { kind: "self" }, null),
     hers: propose(hers, { kind: "person", id: "22222222-2222-4222-8222-222222222222" }, "Priya"),
   };
@@ -192,7 +215,7 @@ function teamDirectory(state, server = null) {
   if (server) { server.people = people; server.me = "p-me"; }
   state.applyPull({
     cursor: 0, workspace: { name: "Acme", role: "member", processingLevelMax: 1 }, me: { personId: "p-me" },
-    spaces: [], commitments: [], visibleCommitmentIds: [], people,
+    spaces: SPACES, commitments: [], visibleCommitmentIds: [], people,
   });
 }
 
@@ -233,4 +256,85 @@ test("suggestions stay unshared until accepted", async (t) => {
   await callWithPriya(store);
   await round(store, state, server);
   assert.equal(server.calls.includes("share_commitment"), false);
+});
+
+test("nothing is shared before the first pull says which space is My notes", async (t) => {
+  const { store, directory } = await fixture(t);
+  const state = TeamState.create(directory, { serverWorkspaceId: SERVER_WS, accountUserId: "u1", name: "Acme" });
+  t.after(() => state.close());
+  accepted(store, "Send the deck");
+  assert.equal(sync.plan(store, state).shares.length, 0);
+});
+
+test("action items go where their recording is shared: Only me keeps them in My notes", async (t) => {
+  const { store, state, server } = await setup(t);
+  teamDirectory(state, server);
+  const { recording, mine } = await callWithPriya(store);
+  const ws = { workspaceId: store.identity.id };
+  store.transitionAction(mutation(store, mine.revision), mine.id, { status: "accepted" });
+  await round(store, state, server);
+  assert.equal(server.rows.get(mine.id).spaceId, "s0", "a recording shared with nobody keeps its items in My notes");
+  const shareWith = (teamSpaceId) => {
+    const current = store.get(ws, "recording", recording.id);
+    store.updateRecording(mutation(store, current.revision), recording.id, { metadata: { ...current.metadata, teamSpaceId } });
+  };
+  shareWith("s2");
+  await round(store, state, server);
+  assert.equal(server.rows.get(mine.id).spaceId, "s2", "sharing the recording with Sales moves its item there");
+  shareWith("s3");
+  await round(store, state, server);
+  assert.equal(server.rows.get(mine.id).spaceId, "s0", "a team this person can only read falls back to My notes");
+  const manual = accepted(store, "Book the venue");
+  await round(store, state, server);
+  assert.equal(server.rows.get(manual.id).spaceId, "s0", "a typed action has no source and stays in My notes");
+});
+
+test("an action a teammate already shared waits for a decision instead of being shared twice", async (t) => {
+  const { store, state, server } = await setup(t);
+  teamDirectory(state, server);
+  const theirs = server.teammateShares("Send the revised deck by Monday", "p-me");
+  await round(store, state, server);
+  const { mine } = await callWithPriya(store);
+  store.transitionAction(mutation(store, mine.revision), mine.id, { status: "accepted" });
+  await round(store, state, server);
+  assert.equal(server.rows.has(mine.id), false, "held back");
+  assert.deepEqual(state.duplicate(mine.id), { commitmentId: theirs, decision: "pending", sentStatus: null });
+  state.setDuplicate(mine.id, theirs, "both");
+  await round(store, state, server);
+  assert.equal(server.rows.has(mine.id), true, "shared once the person chooses to share it too");
+});
+
+test("a linked action keeps its status in step with the teammate's copy, both ways", async (t) => {
+  const { store, state, server } = await setup(t);
+  teamDirectory(state, server);
+  const theirs = server.teammateShares("Send the revised deck by Monday", "p-me");
+  await round(store, state, server);
+  const { mine } = await callWithPriya(store);
+  const ws = { workspaceId: store.identity.id };
+  store.transitionAction(mutation(store, mine.revision), mine.id, { status: "accepted" });
+  await round(store, state, server);
+  state.setDuplicate(mine.id, theirs, "theirs", "accepted");
+  store.transitionAction(mutation(store, store.get(ws, "action", mine.id).revision), mine.id, { status: "done" });
+  await round(store, state, server);
+  assert.equal(server.rows.has(mine.id), false, "never shared as a second copy");
+  assert.equal(server.rows.get(theirs).status, "done", "done here marks theirs done");
+  server.teammateSets(theirs, "deferred");
+  await round(store, state, server);
+  assert.equal(store.get(ws, "action", mine.id).status, "deferred", "their change reaches the linked action");
+  const before = server.calls.filter((c) => c === "set_commitment_status").length;
+  await round(store, state, server);
+  assert.equal(server.calls.filter((c) => c === "set_commitment_status").length, before, "following theirs is not echoed back");
+});
+
+test("a different owner or different words is not a duplicate", async (t) => {
+  const { store, state, server } = await setup(t);
+  teamDirectory(state, server);
+  server.teammateShares("Send the revised deck by Monday", "p-raghav");
+  server.teammateShares("Review the hiring plan", "p-me");
+  await round(store, state, server);
+  const { mine } = await callWithPriya(store);
+  store.transitionAction(mutation(store, mine.revision), mine.id, { status: "accepted" });
+  await round(store, state, server);
+  assert.equal(server.rows.has(mine.id), true);
+  assert.equal(state.duplicate(mine.id), null);
 });

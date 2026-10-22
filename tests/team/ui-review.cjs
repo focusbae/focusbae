@@ -90,6 +90,9 @@ delete env.ELECTRON_RUN_AS_NODE; delete env.NODE_OPTIONS;
     await page.keyboard.press('Escape');
     await page.screenshot({ path: path.join(output, 'team-teammate-page-light.png'), fullPage: true });
     await page.getByRole('navigation').getByRole('button', { name: 'People', exact: true }).click();
+    // Every teammate is listed from the day they join, before any meeting with them.
+    await page.getByRole('button', { name: /Raghav/ }).waitFor();
+    await page.screenshot({ path: path.join(output, 'team-people-light.png'), fullPage: true });
     await page.getByRole('button', { name: /Priya.*on the team ledger/ }).click();
     await page.getByRole('heading', { name: 'Priya owes, on the team ledger' }).waitFor();
     await page.getByText('Share the revised plan', { exact: true }).waitFor();
@@ -109,6 +112,12 @@ delete env.ELECTRON_RUN_AS_NODE; delete env.NODE_OPTIONS;
     await page.getByRole('button', { name: 'Record', exact: true }).click();
     await page.getByText('Saving to', { exact: false }).waitFor();
     assert.match(await page.locator('.record-destination').textContent(), /team workspace/);
+    // Share with: Only me by default, with the teams this person can add to.
+    const share = page.getByLabel('Share with');
+    assert.equal(await share.inputValue(), '', 'a new recording is Only me');
+    assert.deepEqual(await share.locator('option').allTextContents(), ['Only me', 'Engineering']);
+    await share.selectOption({ label: 'Engineering' });
+    await page.getByText('Action items you accept go to this team', { exact: false }).waitFor();
     await page.screenshot({ path: path.join(output, 'team-record-light.png'), fullPage: true });
     await page.getByRole('button', { name: 'Close recording dialog' }).click();
     await page.getByRole('navigation').getByRole('button', { name: 'Notes', exact: true }).click();

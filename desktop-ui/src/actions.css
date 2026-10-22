@@ -334,3 +334,15 @@
     grid-template-columns: 1fr;
   }
 }
+/* A teammate seems to have shared this already: decide before it is shared twice. */
+.team-duplicate {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  font-size: 12px;
+}
+.team-duplicate p { margin: 0; }
+.team-duplicate .muted { margin-top: 4px; }
+.team-duplicate-actions { display: flex; gap: 8px; margin-top: 10px; }

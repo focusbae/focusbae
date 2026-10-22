@@ -3,6 +3,7 @@ const { createHash, randomUUID } = require("node:crypto");
 const { ACTION_TRANSITIONS } = require("../workspace/domain");
 
 const folders = require("./folders");
+const { significantWords, similarity, MIN_SCORE, MIN_SHARED } = require("../workspace/restatements");
 
 const SHAREABLE = new Set(["accepted", "deferred", "done", "dropped"]);
 const PAGE = 1000;
@@ -89,6 +90,7 @@ function sharedPeople(store, workspaceId, action, state) {
 function payloadFor(store, workspaceId, action, state = null) {
   const { owner, counterparty } = sharedPeople(store, workspaceId, action, state);
   return {
+    ...(state ? { spaceId: homeSpace(store, workspaceId, action, state) } : {}),
     title: action.title,
     status: action.status,
     dueDate: action.dueDate ?? (action.dueAt ? action.dueAt.slice(0, 10) : null),
@@ -96,6 +98,46 @@ function payloadFor(store, workspaceId, action, state = null) {
     counterparty,
     ...sourceOf(store, workspaceId, action),
   };
+}
+
+// The team an action belongs to (TEAM_PLAN §4): the page it was quoted from, or the
+// "Share with" choice of its recording. Anything else, and a team this person can no
+// longer add to, is My notes: seen only by them and the people the action names.
+function homeSpace(store, workspaceId, action, state) {
+  const privateSpace = state.privateSpaceId();
+  const evidence = action.evidence?.[0];
+  let spaceId = null;
+  try {
+    if (evidence?.sourceKind === "note") {
+      const note = store.get({ workspaceId }, "note", evidence.segmentId, { includeDeleted: true });
+      spaceId = note.kind === "daily" ? privateSpace : folders.location(store, state, note.folderId).spaceId;
+    } else if (evidence) {
+      const segment = store.get({ workspaceId }, "transcript", evidence.segmentId, { includeDeleted: true });
+      spaceId = store.get({ workspaceId }, "recording", segment.recordingId, { includeDeleted: true }).metadata?.teamSpaceId ?? null;
+    }
+  } catch { /* a missing source falls back to My notes */ }
+  return spaceId && canWrite(state, spaceId) ? spaceId : privateSpace;
+}
+
+// An open team commitment a teammate already shared that this action repeats: the same
+// owner and most of the same words, dates ignored (the restatement rule, which prefers
+// missing a duplicate to wrongly merging two promises).
+function teamCopy(state, action, payload, localIds) {
+  const words = significantWords(action.title);
+  if (words.size < MIN_SHARED) return null;
+  const people = new Map(state.people().map((p) => [p.id, p]));
+  const ownerId = payload.owner?.self ? state.binding().mePersonId : payload.owner?.personId ?? null;
+  const ownerName = payload.owner?.name?.trim().toLowerCase() ?? null;
+  let best = null;
+  for (const c of state.commitments()) {
+    if (localIds.has(c.id) || state.sent(c.id) || !["accepted", "deferred"].includes(c.status)) continue;
+    const sameOwner = ownerId ? c.owner_person_id === ownerId
+      : !!ownerName && people.get(c.owner_person_id)?.name.trim().toLowerCase() === ownerName;
+    if (!sameOwner) continue;
+    const { score, shared } = similarity(words, c.title);
+    if (shared >= MIN_SHARED && score >= MIN_SCORE && (!best || score > best.score)) best = { commitment: c, score };
+  }
+  return best?.commitment ?? null;
 }
 
 const hashOf = (payload) => createHash("sha256").update(JSON.stringify(payload)).digest("hex");
@@ -107,12 +149,17 @@ function plan(store, state) {
   const shares = [];
   const unshares = [];
   const statusOnly = new Map();
-  const localIds = new Set();
-  for (const action of listAll(store, workspaceId, "action")) {
-    localIds.add(action.id);
+  const links = [];
+  const actions = listAll(store, workspaceId, "action");
+  const localIds = new Set(actions.map((a) => a.id));
+  // Until the first pull names this person's My notes, nothing is shared to a guessed team.
+  const ready = !!state.privateSpaceId();
+  for (const action of actions) {
     const sent = state.sent(action.id);
     if (!action.deletedAt && SHAREABLE.has(action.status)) {
+      if (!ready) continue;
       const payload = payloadFor(store, workspaceId, action, state);
+      if (!sent && holdBack(state, action, payload, localIds, links)) continue;
       const hash = hashOf(payload);
       if (!sent || sent.hash !== hash) shares.push({ id: action.id, payload, hash, version: sent?.version ?? null });
       statusOnly.set(action.id, action.status);
@@ -120,7 +167,28 @@ function plan(store, state) {
   }
   // Shared before but gone from this workspace entirely (purged): withdraw it too.
   for (const id of state.sharedIds()) if (!localIds.has(id)) unshares.push(id);
-  return { shares, unshares, statusOnly, ...folderWork, ...planNotes(store, state) };
+  return { shares, unshares, statusOnly, links, ...folderWork, ...planNotes(store, state) };
+}
+
+// Whether an action that was never shared waits instead: it looks like a teammate's
+// (until the person decides), or the person linked it to theirs. A linked action sends
+// its own status changes to that copy.
+function holdBack(state, action, payload, localIds, links) {
+  const dup = state.duplicate(action.id);
+  if (dup?.decision === "both") return false;
+  if (dup?.decision === "theirs") {
+    const theirs = state.commitment(dup.commitmentId);
+    if (!theirs) { state.setDuplicate(action.id, null, null); return false; } // their copy is gone: share this one
+    if (action.status !== dup.sentStatus && theirs.rights) links.push({ actionId: action.id, commitmentId: theirs.id, status: action.status });
+    return true;
+  }
+  const match = teamCopy(state, action, payload, localIds);
+  if (match) {
+    if (dup?.commitmentId !== match.id) state.setDuplicate(action.id, match.id, "pending");
+    return true;
+  }
+  if (dup) state.setDuplicate(action.id, null, null);
+  return false;
 }
 
 // Notes go to My notes unless the person chose a team. Until the first pull says which
@@ -196,6 +264,16 @@ async function exchange(account, state, work) {
           continue;
         } catch (inner) { errors.push(inner.message); continue; }
       }
+      errors.push(error.message);
+    }
+  }
+  const linked = [];
+  for (const link of work.links ?? []) {
+    try {
+      await account.rpc("set_commitment_status", { p_id: link.commitmentId, p_status: link.status, p_version: null });
+      linked.push(link);
+    } catch (error) {
+      if (error.code === "POLICY_DENIED" || error.code === "SIGNED_OUT") throw error;
       errors.push(error.message);
     }
   }
@@ -277,7 +355,7 @@ async function exchange(account, state, work) {
       if (error.code === "FORBIDDEN") notesDeleted.push(id); else errors.push(error.message);
     }
   }
-  const pushed = { sent, withdrawn, notesSent, notesDeleted, uploaded, errors, foldersSent, folderAliases, folderSnapshots: work.folderSnapshots, noteSnapshots: work.noteSnapshots };
+  const pushed = { sent, linked, withdrawn, notesSent, notesDeleted, uploaded, errors, foldersSent, folderAliases, folderSnapshots: work.folderSnapshots, noteSnapshots: work.noteSnapshots };
   let pull;
   try {
     pull = await account.rpc("pull_changes", { p_workspace: ws, p_since: folderAliases.length ? 0 : binding.cursor });
@@ -397,6 +475,7 @@ function mirrorPages(store, state, result) {
 function apply(store, state, result) {
   for (const s of result.sent) state.markSent(s.id, s.hash, s.version);
   for (const id of result.withdrawn) state.forgetSent(id);
+  for (const l of result.linked ?? []) state.setLinkedStatus(l.actionId, l.status);
   for (const n of result.notesSent ?? []) state.markNoteSent(n.id, n.hash, n.version);
   for (const id of result.notesDeleted ?? []) state.forgetNoteSent(id);
   for (const u of result.uploaded ?? []) state.markAttachmentSent(u.id, u.noteId, u.contentHash, !!u.bytes);
@@ -443,17 +522,9 @@ function apply(store, state, result) {
     if (!sent || (sent.version !== null && remote.version <= sent.version)) continue;
     let local;
     try { local = store.get({ workspaceId }, "action", remote.id); } catch { continue; }
-    // A finished action reopens before it can be deferred, so take the two steps the
-    // local rules allow rather than leaving the Mac out of step with the team.
-    const steps = ACTION_TRANSITIONS[local.status]?.includes(remote.status) ? [remote.status]
-      : ["done", "dropped"].includes(local.status) && remote.status === "deferred" ? ["accepted", "deferred"] : [];
-    for (const status of local.status === remote.status ? [] : steps) {
-      local = store.transitionAction({ workspaceId, clientRequestId: randomUUID(), expectedRevision: local.revision }, remote.id, {
-        status,
-        ...(["done", "dropped"].includes(local.status) ? { reopen: true } : {}),
-      });
-    }
-    if (steps.length && local.status === remote.status) applied++;
+    const steps = local.status === remote.status ? [] : stepsTo(local.status, remote.status);
+    local = follow(store, workspaceId, local, remote.status);
+    if (local.status === remote.status && steps.length) applied++;
     // Record what the server now holds. If this Mac also changed something else
     // meanwhile (the title, the due date), leave it unsent so the next round sends it
     // on top of the teammate's change instead of dropping it.
@@ -462,8 +533,34 @@ function apply(store, state, result) {
       && (payload.dueDate ?? null) === (remote.due_date ?? null);
     state.markSent(remote.id, inStep ? hashOf(payload) : "", remote.version);
   }
+  // A teammate's change to a copy this Mac linked to (instead of sharing its own)
+  // reaches the linked action too, unless this Mac changed it meanwhile.
+  for (const action of listAll(store, workspaceId, "action")) {
+    const dup = state.duplicate(action.id);
+    if (dup?.decision !== "theirs" || action.deletedAt || action.status !== dup.sentStatus) continue;
+    const theirs = state.commitment(dup.commitmentId);
+    if (!theirs || theirs.status === dup.sentStatus) continue;
+    const after = follow(store, workspaceId, action, theirs.status);
+    if (after.status === theirs.status) { state.setLinkedStatus(action.id, theirs.status); applied++; }
+  }
   if (result.errors.length) state.recordError(result.errors[0]);
   return { removed: false, applied, notesChanged: notesChanged || foldersChanged || mirrors.changed || lost, dropped: mirrors.dropped };
+}
+
+// A finished action reopens before it can be deferred, so take the two steps the local
+// rules allow rather than leaving the Mac out of step with the team.
+function stepsTo(from, to) {
+  return ACTION_TRANSITIONS[from]?.includes(to) ? [to]
+    : ["done", "dropped"].includes(from) && to === "deferred" ? ["accepted", "deferred"] : [];
+}
+function follow(store, workspaceId, local, status) {
+  for (const step of local.status === status ? [] : stepsTo(local.status, status)) {
+    local = store.transitionAction({ workspaceId, clientRequestId: randomUUID(), expectedRevision: local.revision }, local.id, {
+      status: step,
+      ...(["done", "dropped"].includes(local.status) ? { reopen: true } : {}),
+    });
+  }
+  return local;
 }
 
 const canWrite = (state, spaceId) => state.spaces().some((s) => s.id === spaceId && s.role === "editor");

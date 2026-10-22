@@ -40,6 +40,16 @@ CREATE TABLE IF NOT EXISTS mirrored_attachments (attachment_id TEXT PRIMARY KEY,
 CREATE TABLE IF NOT EXISTS remote_notes (id TEXT PRIMARY KEY, version INTEGER NOT NULL, data_json TEXT NOT NULL CHECK(json_valid(data_json))) STRICT;
 -- Who the team sees as owing an action and who it is owed to, chosen on this Mac.
 -- Absent = the default (the action's own owner; the one other named person, if any).
+-- An accepted action that looks like one a teammate already shared: held back until the
+-- person decides. "theirs" links to that copy instead of sharing a second one; "both"
+-- shares it anyway.
+CREATE TABLE IF NOT EXISTS duplicates (
+  action_id TEXT PRIMARY KEY,
+  commitment_id TEXT NOT NULL,
+  decision TEXT NOT NULL CHECK(decision IN ('pending', 'theirs', 'both')),
+  sent_status TEXT,
+  updated_at TEXT NOT NULL
+) STRICT;
 CREATE TABLE IF NOT EXISTS mappings (
   action_id TEXT PRIMARY KEY,
   owner_person_id TEXT,
@@ -111,7 +121,7 @@ class TeamState {
   // Removed from the workspace: keep the binding as a marker, forget everything synced.
   markRemoved() {
     this.db.transaction(() => {
-      for (const table of ["spaces", "people", "commitments", "shared", "mappings", "note_spaces", "notes_sent", "attachments_sent", "remote_notes", "mirrored", "mirrored_attachments"]) this.db.prepare(`DELETE FROM ${table}`).run();
+      for (const table of ["spaces", "people", "commitments", "shared", "mappings", "duplicates", "note_spaces", "notes_sent", "attachments_sent", "remote_notes", "mirrored", "mirrored_attachments"]) this.db.prepare(`DELETE FROM ${table}`).run();
       this.db.prepare("UPDATE binding SET status = 'removed', cursor = 0").run();
     })();
   }
@@ -152,6 +162,22 @@ class TeamState {
       owner_person_id = excluded.owner_person_id, counterparty_person_id = excluded.counterparty_person_id, updated_at = excluded.updated_at`)
       .run(actionId, mapping.ownerPersonId, mapping.counterpartyPersonId, new Date().toISOString());
   }
+  duplicate(actionId) {
+    const row = this.db.prepare("SELECT commitment_id, decision, sent_status FROM duplicates WHERE action_id = ?").get(actionId);
+    return row ? { commitmentId: row.commitment_id, decision: row.decision, sentStatus: row.sent_status } : null;
+  }
+  // sentStatus: for a linked action, the status both copies last agreed on.
+  setDuplicate(actionId, commitmentId, decision, sentStatus = null) {
+    if (decision === null) return this.db.prepare("DELETE FROM duplicates WHERE action_id = ?").run(actionId);
+    this.db.prepare(`INSERT INTO duplicates VALUES (?, ?, ?, ?, ?) ON CONFLICT(action_id) DO UPDATE SET
+      commitment_id = excluded.commitment_id, decision = excluded.decision, sent_status = excluded.sent_status,
+      updated_at = excluded.updated_at`)
+      .run(actionId, commitmentId, decision, sentStatus, new Date().toISOString());
+  }
+  setLinkedStatus(actionId, status) {
+    this.db.prepare("UPDATE duplicates SET sent_status = ?, updated_at = ? WHERE action_id = ?").run(status, new Date().toISOString(), actionId);
+  }
+  space(id) { return this.db.prepare("SELECT * FROM spaces WHERE id = ?").get(id) ?? null; }
   // My notes: the private space this account has in the workspace.
   privateSpaceId() {
     return this.db.prepare("SELECT id FROM spaces WHERE kind = 'private'").get()?.id ?? null;

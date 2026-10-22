@@ -8,7 +8,8 @@ module.exports = {
   // Separate local-first updates from the former connected-app feed.
   publish: [{ provider: 'generic', url: qa ? 'http://127.0.0.1:17832/'
     : 'https://pub-f1d20a395b224af7aff8e7b531dbfdae.r2.dev/local/macos/arm64/' }],
-  protocols: [],
+  // One link only: focusbae://team/connect opens Settings > Team workspaces (team/links.js).
+  protocols: [{ name: 'FocusBae', schemes: ['focusbae'] }],
   extraMetadata: { main: 'local-first-main.js', ...(qa ? { focusbaeUpdateQa: true } : {}) },
   files: [
     'package.json', 'local-first-main.js', 'workspace-window.js',

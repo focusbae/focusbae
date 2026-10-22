@@ -98,6 +98,14 @@ delete env.ELECTRON_RUN_AS_NODE; delete env.NODE_OPTIONS;
     await page.screenshot({ path: path.join(output, 'team-person-light.png'), fullPage: true });
     await page.getByRole('button', { name: 'Open Acme kickoff' }).click();
     await page.getByRole('tab', { name: 'Acme kickoff', exact: true }).waitFor();
+    // A focusbae://team/connect link opens Settings with the next step pointed out.
+    await app.evaluate(() => global.workspaceProbe.openCommand('team-connect', { workspace: '99999999-9999-4999-8999-999999999999' }));
+    await page.getByRole('heading', { name: 'Team workspaces' }).waitFor();
+    await page.locator('.team-link-banner').waitFor();
+    assert.ok(await page.locator('.team-link-banner').isVisible(), 'the banner is scrolled into view');
+    await page.waitForTimeout(300);
+    await page.screenshot({ path: path.join(output, 'team-link-light.png') });
+    await page.getByRole('navigation').getByRole('button', { name: 'People', exact: true }).click();
     await page.getByRole('button', { name: 'Record', exact: true }).click();
     await page.getByText('Saving to', { exact: false }).waitFor();
     assert.match(await page.locator('.record-destination').textContent(), /team workspace/);

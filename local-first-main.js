@@ -148,9 +148,32 @@ function refreshTray() {
     { label: "Quit", click: () => app.quit() },
   ]));
 }
+// focusbae://team/connect?workspace=<id> from the team website opens Settings > Team
+// workspaces with that workspace pointed out; it never connects or sends anything by
+// itself (team/links.js). A link can arrive before the window is ready, so the last
+// one waits until then.
+const { parseTeamLink } = require("./team/links");
+let pendingLink = null;
+function followLink(raw) {
+  const link = parseTeamLink(raw);
+  if (!link) return;
+  if (workspace.open("team-connect", link) === null) pendingLink = link;
+}
+app.on("open-url", (event, url) => { event.preventDefault(); followLink(url); });
+// The link is a convenience: failing to register it (tests forbid system changes)
+// must never stop the app.
+try {
+  if (app.isPackaged) app.setAsDefaultProtocolClient("focusbae");
+  else app.setAsDefaultProtocolClient("focusbae", process.execPath, [path.resolve(process.argv[1])]);
+} catch { /* links stay off; Settings > Team workspaces works without them */ }
+
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
-  app.on("second-instance", () => workspace.open());
+  app.on("second-instance", (_event, argv) => {
+    const link = argv.find((arg) => arg.startsWith("focusbae://"));
+    if (link) followLink(link);
+    else workspace.open();
+  });
   app.whenReady().then(() => {
     privacy.initialize({ app, dialog });
     installSessionPolicy(session.defaultSession, privacy.policy);
@@ -194,7 +217,9 @@ else {
     applyDockPreference(showInDock());
     bindAll();
     refreshTray();
-    workspace.open();
+    if (pendingLink) workspace.open("team-connect", pendingLink);
+    else workspace.open();
+    pendingLink = null;
     Menu.setApplicationMenu(Menu.buildFromTemplate([
       ...(process.platform === "darwin" ? [{ role: "appMenu" }] : []),
       { label: "File", submenu: [

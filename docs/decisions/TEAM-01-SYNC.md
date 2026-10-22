@@ -144,6 +144,15 @@ read them. HEIC photos send their PNG preview, since browsers cannot show HEIC. 
 over the service's 50 MB limit are listed but stay on this Mac, and the web says so. One
 round holds at most 120 MB of uploads in memory; the rest go in later rounds.
 
+## The team connect link (owner, 2026-10-22)
+
+The local-first release had retired every URL scheme. One is back for onboarding:
+`focusbae://team/connect?workspace=<id>`, from "Open in FocusBae" on the team website.
+`team/links.js` accepts exactly that shape and ignores anything else; it opens
+Settings > Team workspaces, says what to do next and highlights that workspace. It never
+connects, sends or changes anything by itself: the person still clicks Connect and Add.
+The release config, its test and the packaging audit allow this scheme and no other.
+
 ## Open
 
 - Sync only runs for the open workspace; background sync of other team workspaces.

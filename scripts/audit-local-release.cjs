@@ -21,8 +21,11 @@ for (const file of files)
 const plist = execFileSync("/usr/bin/plutil", ["-p", path.join(app, "Contents/Info.plist")], { encoding: "utf8" });
 for (const key of ["NSScreenCaptureDescription",
   "NSBluetoothAlwaysUsageDescription", "NSBluetoothPeripheralUsageDescription",
-  "NSCameraUsageDescription", "CFBundleURLTypes"])
-  assert.ok(!plist.includes(`"${key}"`), `Retired permission or protocol: ${key}`);
+  "NSCameraUsageDescription"])
+  assert.ok(!plist.includes(`"${key}"`), `Retired permission: ${key}`);
+// One URL scheme, focusbae, for the team connect link (team/links.js); no other.
+const schemes = [...plist.matchAll(/"CFBundleURLSchemes" => \[([^\]]*)\]/g)].flatMap((m) => [...m[1].matchAll(/"([^"]+)"/g)].map((s) => s[1]));
+assert.deepEqual(schemes, ["focusbae"], `Unexpected URL schemes: ${schemes.join(", ")}`);
 for (const key of ["NSMicrophoneUsageDescription", "NSAudioCaptureUsageDescription", "NSAppleEventsUsageDescription"])
   assert.ok(plist.includes(`"${key}"`), `Missing required permission: ${key}`);
 // A declared minimum below what the helpers need lets the app install where

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 
 const api = window.focusbaeWorkspace;
 async function unwrap(promise) {
@@ -23,7 +23,10 @@ export function useTeamWorkspaces() {
 
 // Team workspaces: connect an account, then add workspaces you belong to as separate
 // workspaces on this Mac. Personal workspaces never sync; this section says so plainly.
-export function TeamSettings({ openWorkspace }) {
+// `target`: a server workspace id from a focusbae://team/connect link, pointed out here
+// with the next step; nothing happens until the person clicks.
+export function TeamSettings({ openWorkspace, target = null }) {
+  const section = useRef(null);
   const [team, setTeam] = useState(null);
   const [remote, setRemote] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -42,6 +45,11 @@ export function TeamSettings({ openWorkspace }) {
     unwrap(api.team.remoteWorkspaces()).then(setRemote).catch((failure) => setError(failure.message));
   }, [connected, team?.workspaces?.length]);
 
+  // Scroll once the section exists (the team state loads after the page opens).
+  useEffect(() => {
+    if (target && team?.available) section.current?.scrollIntoView({ block: "start" });
+  }, [target, team?.available]);
+
   if (!team?.available) return null;
 
   const act = async (operation) => {
@@ -52,8 +60,17 @@ export function TeamSettings({ openWorkspace }) {
   const local = new Map((team.workspaces ?? []).map((w) => [w.serverWorkspaceId, w]));
 
   return (
-    <section className="team-settings" aria-labelledby="team-title">
+    <section className="team-settings" aria-labelledby="team-title" ref={section}>
       <h2 id="team-title">Team workspaces</h2>
+      {target && !local.has(target) && (
+        <p className="team-link-banner" role="status">
+          {!connected
+            ? "Your team invited you. Connect your team account to add the workspace to this Mac."
+            : (remote ?? []).some((w) => w.id === target)
+              ? "Add the highlighted workspace to this Mac to start."
+              : "This account isn't in that workspace yet. Accept the invitation email with the same address, then come back."}
+        </p>
+      )}
       <p className="storage-explanation">
         Team workspaces sync notes, attachments and accepted commitments with their quotes.
         Your Personal workspace, recordings and full transcripts stay on this Mac.
@@ -81,7 +98,7 @@ export function TeamSettings({ openWorkspace }) {
           {(remote ?? []).map((w) => {
             const here = local.get(w.id);
             return (
-              <div className="setting-row" key={w.id}>
+              <div className={`setting-row ${w.id === target && !here ? "team-link-target" : ""}`} key={w.id}>
                 <span className="team-setting-copy">
                   <span>{w.name}</span>
                   <span className="muted">

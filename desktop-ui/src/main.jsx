@@ -333,7 +333,7 @@ function Overview({ page, workspace, refreshKey }) {
   );
 }
 
-function Preferences({ workspace, shared, privacy, run, saved, models, openGuide, openClipboard, openWorkspace }) {
+function Preferences({ workspace, shared, privacy, run, saved, models, openGuide, openClipboard, openWorkspace, teamTarget }) {
   const [name, setName] = useState(workspace.name);
   const [theme, setTheme] = useState(workspace.preferences.theme);
   const [notificationsEnabled, setNotificationsEnabled] = useState(
@@ -475,7 +475,7 @@ function Preferences({ workspace, shared, privacy, run, saved, models, openGuide
       </section>
       <AppleNotesImport key={`apple-${workspace.id}`} workspaceId={workspace.id} run={run} />
       <BackupSettings key={workspace.id} workspaceId={workspace.id} run={run} openWorkspace={openWorkspace} />
-      <TeamSettings openWorkspace={openWorkspace} />
+      <TeamSettings openWorkspace={openWorkspace} target={teamTarget} />
       <section aria-labelledby="privacy-title">
         <h2 id="privacy-title">Privacy</h2>
         <div className="setting-row">
@@ -543,6 +543,8 @@ function App() {
   const [selectedRecording, setSelectedRecording] = useState(null);
   const [actionTarget, setActionTarget] = useState(null);
   const [personTarget, setPersonTarget] = useState(null);
+  // A team workspace pointed out by a focusbae://team/connect link from the website.
+  const [teamTarget, setTeamTarget] = useState(null);
   const [initialNoteId, setInitialNoteId] = useState(null);
   // The notebook's open pages live here so they survive a visit to Actions.
   const [noteTabs, setNoteTabs] = useState([]);
@@ -689,8 +691,11 @@ function App() {
     run(() => unwrap(api.workspace.open({ workspaceId })))
       .then(() => navigate("Today"))
       .catch(setError);
-  commandHandler.current = async ({ name, id }) => {
-    if (name === "record") {
+  commandHandler.current = async ({ name, id, payload }) => {
+    if (name === "team-connect") {
+      setTeamTarget(payload?.workspace ?? null);
+      await navigate("Settings");
+    } else if (name === "record") {
       if (recording.state?.active || recording.state?.processingId || recording.state?.importing) await navigate("Recordings");
       else await beginRecording();
     } else if (name === "new-note") {
@@ -893,6 +898,7 @@ function App() {
               openGuide={() => setWorkspaceGuide(true)}
               openClipboard={() => navigate("Clipboard history")}
               openWorkspace={switchWorkspace}
+              teamTarget={teamTarget}
             />
           ) : page === "Clipboard history" ? (
             <ClipboardHistory settings={() => navigate("Settings")} />

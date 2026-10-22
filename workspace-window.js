@@ -34,7 +34,7 @@ let quitting = false;
 let pendingCommand = null;
 let clipboardHistory;
 let backups;
-const COMMANDS = new Set(["new-note", "record", "recordings", "actions", "settings", "clipboard"]);
+const COMMANDS = new Set(["new-note", "record", "recordings", "actions", "settings", "clipboard", "team-connect"]);
 const flushRequests = new Map();
 function flushPending() {
   if (!win || win.isDestroyed()) return Promise.resolve(true);
@@ -247,13 +247,13 @@ function initialize({ privacy, busy, desktopSettings, onRecordingChange = () => 
   ready().then(() => reminders.start()).catch(() => {});
   return catalog;
 }
-function open(command) {
+function open(command, payload = null) {
   if (!catalog) return null;
   if (command !== undefined) {
     if (!COMMANDS.has(command)) throw new Error("Unknown workspace command");
     // Keep the latest navigation intent until the renderer is ready and its
     // current dialog/save is finished. Repeated shortcuts do not pile up notes.
-    pendingCommand = { id: randomUUID(), name: command };
+    pendingCommand = { id: randomUUID(), name: command, ...(payload ? { payload } : {}) };
   }
   if (win && !win.isDestroyed()) {
     win.show();

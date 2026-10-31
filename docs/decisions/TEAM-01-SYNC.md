@@ -1,7 +1,7 @@
 # TEAM-01: Team Workspaces and Sync
 
-Date: 2026-10-20. Status: implemented behind configuration; off in release builds
-until the team service has a public address (`FOCUSBAE_TEAM_URL`).
+Date: 2026-10-20. Status: implemented; release builds use https://team.focusbae.com
+(development needs `FOCUSBAE_TEAM_URL`; `off` disables it in any build).
 Code: `team/`, `privacy/local-policy.js`. Tests: `tests/team/`, `npm run test:local:network:team`.
 
 ## What a team workspace is

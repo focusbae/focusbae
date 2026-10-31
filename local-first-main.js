@@ -177,7 +177,7 @@ else {
   app.whenReady().then(() => {
     privacy.initialize({ app, dialog });
     installSessionPolicy(session.defaultSession, privacy.policy);
-    const teamUrl = require("./team/service").teamUrl();
+    const teamUrl = require("./team/service").teamUrl(process.env, app.isPackaged);
     workspace.initialize({
       privacy, busy: () => false, onRecordingChange: refreshTray,
       teamOptions: teamUrl ? { teamUrl, safeStorage, openExternal: (url) => shell.openExternal(url) } : null,

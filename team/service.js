@@ -446,11 +446,14 @@ class TeamService extends EventEmitter {
   }
 }
 
-// Off unless the team service address is configured. Release builds leave it unset
-// until the service has a public address, so shipped apps never show team features.
-function teamUrl(env = process.env) {
-  const value = env.FOCUSBAE_TEAM_URL;
-  if (!value) return null;
+// The team service. Release builds use the public address; development needs
+// FOCUSBAE_TEAM_URL, so a local run never reaches production by accident, and "off"
+// turns team features off in any build. Nothing is sent until the person connects an
+// account in Settings (npm run test:local:network:team).
+const PUBLIC_TEAM_URL = "https://team.focusbae.com";
+function teamUrl(env = process.env, packaged = false) {
+  const value = env.FOCUSBAE_TEAM_URL ?? (packaged ? PUBLIC_TEAM_URL : null);
+  if (!value || value === "off") return null;
   const url = new URL(value);
   if (url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1"].includes(url.hostname)))
     throw new Error("FOCUSBAE_TEAM_URL must be https, or http on localhost");

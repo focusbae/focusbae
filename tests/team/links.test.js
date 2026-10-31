@@ -26,3 +26,12 @@ test("anything else is ignored", () => {
     null,
   ]) assert.equal(parseTeamLink(raw), null, String(raw));
 });
+
+test("release builds use the public team service; development and 'off' do not", () => {
+  const { teamUrl } = require("../../team/service");
+  assert.equal(teamUrl({}, true), "https://team.focusbae.com");
+  assert.equal(teamUrl({}, false), null, "a development run needs FOCUSBAE_TEAM_URL");
+  assert.equal(teamUrl({ FOCUSBAE_TEAM_URL: "off" }, true), null);
+  assert.equal(teamUrl({ FOCUSBAE_TEAM_URL: "http://localhost:3000/x" }, true), "http://localhost:3000");
+  assert.throws(() => teamUrl({ FOCUSBAE_TEAM_URL: "http://team.example.com" }, true), /must be https/);
+});

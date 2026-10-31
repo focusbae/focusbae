@@ -78,6 +78,7 @@ const CHANNELS = [
   "notes.findCommitments",
   "notes.rewrite",
   "people.get",
+  "people.pages",
   "people.priorContext",
   "reminders.snooze",
   "privacy.get",
@@ -92,6 +93,10 @@ const CHANNELS = [
   "capture.retry",
   "capture.cancel",
   "capture.discard",
+  "capture.move",
+  "capture.cloud",
+  "capture.shareTargets",
+  "capture.shareWith",
   "capture.identifySpeaker",
   "capture.playbackInfo",
   "capture.playbackRead",
@@ -106,6 +111,21 @@ const CHANNELS = [
   "models.download",
   "models.import",
   "models.installLanguage",
+  "team.state",
+  "team.connect",
+  "team.cancelConnect",
+  "team.disconnect",
+  "team.remoteWorkspaces",
+  "team.join",
+  "team.sync",
+  "team.ledger",
+  "team.mapping",
+  "team.setMapping",
+  "team.resolveDuplicate",
+  "team.noteVisibility",
+  "team.setNoteVisibility",
+  "team.people",
+  "team.person",
 ];
 const PUBLIC_ERRORS = {
   ATTACHMENT_TOO_LARGE: "This file is larger than 100 MB. Choose a smaller file.",
@@ -164,11 +184,25 @@ const PUBLIC_ERRORS = {
   STALE_SOURCE:
     "The supporting transcript changed. Review the source before accepting this suggestion.",
   INVALID_EVIDENCE: "The supporting transcript quote is no longer valid.",
+  TEAM_UNAVAILABLE: "Team workspaces are not available in this version of FocusBae.",
+  SIGNED_OUT: "Connect your team account in Settings, then try again.",
+  CONNECT_TIMEOUT: "Connecting took too long. Try again from Settings.",
+  CANCELLED: "Connecting was cancelled.",
+  INVALID_GRANT: "The team service did not accept this connection. Try again.",
+  KEYCHAIN_UNAVAILABLE: "FocusBae could not use the macOS Keychain to store your team sign-in.",
+  ALREADY_EXISTS: "That team workspace is already on this Mac.",
+  FORBIDDEN: "You don't have access to that team workspace.",
+  READ_ONLY: "This page belongs to a teammate. Only they can change it.",
+  CLOUD_UNAVAILABLE: "Cloud processing isn't available for this workspace right now. Choose This Mac only, or check your team connection.",
+  TRANSCRIPTION_FAILED: "Cloud transcription didn't finish. Saved audio is kept; retry, or transcribe on this Mac.",
+  // Says exactly what stops the move; the message is written for the person.
+  MOVE_BLOCKED: null,
 };
 function publicError(error) {
   const code = Object.hasOwn(PUBLIC_ERRORS, error.code)
     ? error.code
     : "UNAVAILABLE";
+  if (code === "MOVE_BLOCKED") return { ok: false, error: { code, message: error.message, retryable: false } };
   return {
     ok: false,
     error: {
@@ -209,6 +243,7 @@ function registerWorkspaceIPC({
   playback,
   appleNotes,
   clipboard,
+  team = null,
   attachments = new (require("./note-attachments").NoteAttachments)(catalog),
 }) {
   const emit = (type = "workspace.changed", entity) => {
@@ -223,6 +258,11 @@ function registerWorkspaceIPC({
         sequence: ++catalog.sequence,
       });
     }
+    if (typeof type === "string" && (type.startsWith("action") || type === "notes.changed")) team?.localChanged();
+  };
+  const teamService = () => {
+    check(team, "TEAM_UNAVAILABLE", "Team workspaces are not configured");
+    return team;
   };
   const transcriptDocument = (input, format) => {
     const store = catalog.scoped(input.workspaceId);
@@ -367,6 +407,24 @@ function registerWorkspaceIPC({
     "capture.state": () => recording.snapshot(),
     "capture.playbackInfo": (input) => playback.info(input),
     "capture.playbackRead": (input) => playback.read(input),
+    // Which cloud processing recordings here may use (TEAM_PLAN §3).
+    "capture.cloud": (input) => {
+      v.object(input, ["workspaceId"]);
+      const store = catalog.scoped(input.workspaceId);
+      // speech: Deepgram transcription (level 3); ai: OpenAI finds commitments (level 2+).
+      return { speech: !!recording.cloudSpeech?.(store), ai: !!recording.cloudAI?.(store) };
+    },
+    // Team workspaces: who a recording's accepted action items are shared with.
+    "capture.shareTargets": (input) => {
+      v.object(input, ["workspaceId"]);
+      return recording.teamSpaces?.(catalog.scoped(input.workspaceId)) ?? null;
+    },
+    "capture.shareWith": (input) => {
+      v.object(input, ["workspaceId", "id", "spaceId"]);
+      const saved = recording.setShareWith(input.workspaceId, input.id, input.spaceId ?? null);
+      emit("actions.changed");
+      return saved;
+    },
     "capture.storage": (input) => {
       v.object(input, ["workspaceId"]);
       return recording.storage(input.workspaceId);
@@ -540,6 +598,51 @@ function registerWorkspaceIPC({
       recording.discard(input.id);
       return true;
     },
+    // Moves a finished recording, and everything quoted from it, to another workspace
+    // on this Mac (TEAM_PLAN §6.6). Refused once its source team holds a commitment.
+    "capture.move": async (input, event) => {
+      v.object(input, ["workspaceId", "id", "targetWorkspaceId"]);
+      const source = catalog.scoped(input.workspaceId);
+      const id = v.uuid(input.id), targetId = v.uuid(input.targetWorkspaceId);
+      check(!recording?.busy(), "WORKSPACE_BUSY", "Stop capture and processing before moving a recording");
+      const entry = catalog.entries.find((item) => item.id === targetId);
+      check(entry && targetId !== source.identity.id, "NOT_FOUND", "Choose another workspace on this Mac");
+      const path = require("node:path");
+      const { TeamState } = require("../team/state");
+      const transfer = require("./transfer");
+      const sourceTeam = TeamState.exists(source._directory) ? new TeamState(source._directory) : null;
+      const shared = new Set(sourceTeam?.sharedIds() ?? []);
+      sourceTeam?.close();
+      const bundle = transfer.collect(source, id);
+      const reasons = transfer.blockers(bundle, shared);
+      check(!reasons.length, "MOVE_BLOCKED", reasons.join(" "));
+      const targetDirectory = path.join(catalog.root, entry.directory);
+      const kept = bundle.actions.filter((a) => ["accepted", "deferred", "done"].includes(a.status)).length;
+      const result = await dialog.showMessageBox(getWindow(), {
+        type: "warning",
+        message: `Move "${bundle.recording.title || "this recording"}" to ${entry.name}?`,
+        detail: [
+          `Its transcript, speakers, commitments and audio leave ${catalog.active().name} and can no longer be found there.`,
+          TeamState.exists(targetDirectory) && kept
+            ? `${kept} ${kept === 1 ? "commitment" : "commitments"} from it will be shared with ${entry.name}'s team when it next syncs.`
+            : null,
+        ].filter(Boolean).join(" "),
+        buttons: ["Cancel", "Move"],
+        defaultId: 0,
+        cancelId: 0,
+      });
+      check(trusted(event, getWindow()), "PERMISSION_DENIED", "Workspace window closed");
+      catalog.scoped(input.workspaceId);
+      if (result.response !== 1) return false;
+      const target = await require("./index").openWorkspace({ directory: targetDirectory });
+      try {
+        transfer.moveRecording({ source, target, recordingId: id, shared });
+      } finally {
+        target.close();
+      }
+      emit("workspace.changed");
+      return true;
+    },
     bootstrap: () => snapshot(),
     "workspace.list": () => catalog.list(),
     "workspace.create": (input) => catalog.create(input),
@@ -572,29 +675,53 @@ function registerWorkspaceIPC({
           .createNote(input.context, input.note),
       );
     },
-    "notes.move": (input) => {
+    "notes.move": async (input, event) => {
       v.object(input, ["context", "id", "folderId"]);
-      return catalog
-        .scoped(input.context.workspaceId)
-        .moveNote(input.context, input.id, input.folderId ?? null);
+      const store = catalog.scoped(input.context.workspaceId);
+      const move = team?.previewMove(store, "note", input.id, input.folderId ?? null);
+      if (move) {
+        const answer = await dialog.showMessageBox(getWindow(), {
+          type: "question", message: `Move “${move.name}” to ${move.home}?`,
+          detail: move.private ? "The home team will lose access. Additional team shares and guest invitations remain; review them on the web."
+            : `Members of ${move.home} will be able to read this page. Existing shares and guest invitations remain.`,
+          buttons: ["Cancel", "Move page"], defaultId: 0, cancelId: 0,
+        });
+        check(trusted(event, getWindow()), "PERMISSION_DENIED", "Workspace window closed");
+        if (answer.response !== 1) return publicNote(store.get({ workspaceId: input.context.workspaceId }, "note", input.id));
+      }
+      return store.moveNote(input.context, input.id, input.folderId ?? null);
     },
     "folders.list": (input) => {
       v.object(input, ["workspaceId"]);
-      return catalog.scoped(input.workspaceId).folderList({ workspaceId: input.workspaceId });
+      const store = catalog.scoped(input.workspaceId);
+      return team ? team.folderList(store) : store.folderList({ workspaceId: input.workspaceId });
     },
     "folders.create": (input) => {
       v.object(input, ["context", "folder"]);
-      return catalog.scoped(input.context.workspaceId).createFolder(input.context, input.folder);
+      const store = catalog.scoped(input.context.workspaceId);
+      team?.previewMove(store, "folder", null, input.folder.parentId ?? null);
+      return store.createFolder(input.context, input.folder);
     },
-    "folders.update": (input) => {
+    "folders.update": async (input, event) => {
       v.object(input, ["context", "id", "changes"]);
-      return catalog
-        .scoped(input.context.workspaceId)
-        .updateFolder(input.context, input.id, input.changes);
+      const store = catalog.scoped(input.context.workspaceId);
+      const old = store.get({ workspaceId: input.context.workspaceId }, "folder", input.id);
+      const move = team?.previewMove(store, "folder", input.id, input.changes.parentId === undefined ? old.parentId : input.changes.parentId);
+      if (move) {
+        const answer = await dialog.showMessageBox(getWindow(), { type: "question", message: `Move “${old.name}” to ${move.home}?`,
+          detail: `Pages in this folder and its subfolders will belong to ${move.home}. Pages by authors outside that team stay in the old team. Existing shares and guest invitations remain.`,
+          buttons: ["Cancel", "Move folder"], defaultId: 0, cancelId: 0 });
+        check(trusted(event, getWindow()), "PERMISSION_DENIED", "Workspace window closed");
+        if (answer.response !== 1) return old;
+      }
+      return store.updateFolder(input.context, input.id, input.changes);
     },
     "folders.delete": (input) => {
       v.object(input, ["context", "id"]);
-      return catalog.scoped(input.context.workspaceId).deleteFolder(input.context, input.id);
+      const store = catalog.scoped(input.context.workspaceId);
+      const old = store.get({ workspaceId: input.context.workspaceId }, "folder", input.id);
+      team?.previewMove(store, "folder", input.id, old.parentId);
+      return store.deleteFolder(input.context, input.id);
     },
     "notes.daily": (input) => {
       v.object(input, ["context"]);
@@ -934,6 +1061,10 @@ function registerWorkspaceIPC({
       v.object(input, ["workspaceId", "id"]);
       return require("./people").get(catalog.scoped(input.workspaceId), input.workspaceId, input.id);
     },
+    "people.pages": (input) => {
+      v.object(input, ["workspaceId", "name"]);
+      return require("./people").pages(catalog.scoped(input.workspaceId), input.workspaceId, v.text(input.name, "name", 200));
+    },
     "people.priorContext": (input) => {
       v.object(input, ["workspaceId", "recordingId"]);
       return require("./people").priorContext(
@@ -993,6 +1124,73 @@ function registerWorkspaceIPC({
       privacy.policy.revoke(v.choice(input.purpose, ["models", "updates"], "permission"));
       return privacy.policy.snapshot();
     },
+    "team.state": () => (team ? team.snapshot() : { available: false }),
+    "team.connect": async () => {
+      await teamService().account.connect();
+      return team.snapshot();
+    },
+    "team.cancelConnect": () => { teamService().account.cancelConnect(); return team.snapshot(); },
+    "team.disconnect": async () => {
+      const result = await dialog.showMessageBox(getWindow(), {
+        type: "question", buttons: ["Disconnect", "Cancel"], defaultId: 1, cancelId: 1,
+        message: "Disconnect your team account from this Mac?",
+        detail: "Team workspaces stop syncing until you connect again. Nothing is deleted from this Mac or from your team.",
+      });
+      if (result.response === 0) teamService().account.disconnect();
+      return team.snapshot();
+    },
+    "team.remoteWorkspaces": () => teamService().remoteWorkspaces(),
+    "team.join": async (input) => {
+      v.object(input, ["serverWorkspaceId"]);
+      const value = await teamService().join(v.uuid(input.serverWorkspaceId));
+      emit();
+      return value;
+    },
+    "team.sync": async () => { await teamService().syncNow(); return team.snapshot(); },
+    "team.mapping": (input) => {
+      v.object(input, ["workspaceId", "actionId"]);
+      catalog.scoped(input.workspaceId);
+      return teamService().mapping(v.uuid(input.actionId));
+    },
+    "team.setMapping": (input) => {
+      v.object(input, ["workspaceId", "actionId", "ownerPersonId", "counterpartyPersonId"]);
+      catalog.scoped(input.workspaceId);
+      const person = (value) => (value === null ? null : v.uuid(value, "person id"));
+      return teamService().setMapping(v.uuid(input.actionId), {
+        ownerPersonId: person(input.ownerPersonId),
+        counterpartyPersonId: person(input.counterpartyPersonId),
+      });
+    },
+    "team.resolveDuplicate": (input) => {
+      v.object(input, ["workspaceId", "actionId", "decision"]);
+      catalog.scoped(input.workspaceId);
+      return teamService().resolveDuplicate(v.uuid(input.actionId), v.choice(input.decision, ["theirs", "both"], "decision"));
+    },
+    "team.noteVisibility": (input) => {
+      v.object(input, ["workspaceId", "noteId"]);
+      catalog.scoped(input.workspaceId);
+      return teamService().noteVisibility(v.uuid(input.noteId));
+    },
+    "team.setNoteVisibility": (input) => {
+      v.object(input, ["workspaceId", "noteId", "spaceId"]);
+      catalog.scoped(input.workspaceId);
+      return teamService().setNoteVisibility(v.uuid(input.noteId), v.uuid(input.spaceId, "space id"));
+    },
+    "team.people": (input) => {
+      v.object(input, ["workspaceId"]);
+      catalog.scoped(input.workspaceId);
+      return teamService().teamPeople();
+    },
+    "team.person": (input) => {
+      v.object(input, ["workspaceId", "name"]);
+      catalog.scoped(input.workspaceId);
+      return teamService().teamPerson(v.text(input.name, "name", 200));
+    },
+    "team.ledger": (input) => {
+      v.object(input, ["workspaceId"]);
+      catalog.scoped(input.workspaceId);
+      return teamService().ledger();
+    },
     "privacy.setStrict": async (input) => {
       v.object(input, ["enabled"]);
       v.boolean(input.enabled, "enabled");
@@ -1033,6 +1231,12 @@ function registerWorkspaceIPC({
             "capture.state",
             "models.state",
             "semantic.status",
+            "team.state",
+            "team.connect",
+            "team.cancelConnect",
+            "team.disconnect",
+            "team.remoteWorkspaces",
+            "team.sync",
           ].includes(name)
         )
           v.object(input, []);
@@ -1074,7 +1278,7 @@ function registerWorkspaceIPC({
             emit("notes.changed", value?.id ? value : value?.items?.at(-1));
           return { ok: true, value };
         };
-        return ["search.hybrid", "semantic.status", "notes.findCommitments", "appSettings.checkForUpdates", "appSettings.downloadUpdate", "appSettings.installUpdate"].includes(name)
+        return ["search.hybrid", "semantic.status", "notes.findCommitments", "appSettings.checkForUpdates", "appSettings.downloadUpdate", "appSettings.installUpdate"].includes(name) || name.startsWith("team.")
           ? await operation()
           : await catalog.serialize(operation);
       } catch (error) {
@@ -1082,7 +1286,19 @@ function registerWorkspaceIPC({
       }
     });
   privacy.policy.on("change", emit);
+  const teamEvent = () => {
+    const win = getWindow();
+    if (team && win && !win.isDestroyed()) win.webContents.send("workspace:team-event", team.snapshot());
+  };
+  const teamActions = () => emit("actions.changed");
+  const teamNotes = () => emit("notes.changed");
+  team?.on("change", teamEvent);
+  team?.on("actions-changed", teamActions);
+  team?.on("notes-changed", teamNotes);
   return () => {
+    team?.removeListener("change", teamEvent);
+    team?.removeListener("actions-changed", teamActions);
+    team?.removeListener("notes-changed", teamNotes);
     attachments.close();
     for (const name of CHANNELS) ipcMain.removeHandler(`workspace:${name}`);
     privacy.policy.removeListener("change", emit);

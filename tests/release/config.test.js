@@ -43,7 +43,8 @@ test('candidate excludes credentials, test artifacts and nested build output', (
   for (const old of ['main.js', 'call-mode/**/*', 'onboarding/**/*', 'sync.js', 'docs/**/*', 'tests/**/*'])
     assert.equal(c.files.includes(old), false);
   assert.equal(c.extraMetadata.main, 'local-first-main.js');
-  assert.equal(c.protocols.length, 0);
+  // The only URL scheme: team/links.js answers focusbae://team/connect and nothing else.
+  assert.deepEqual(c.protocols, [{ name: 'FocusBae', schemes: ['focusbae'] }]);
   assert.match(c.mac.entitlements, /entitlements\.local/);
   const entitlements = fs.readFileSync(path.join(root, c.mac.entitlements), 'utf8');
   for (const old of ['device.camera', 'screen-capture'])

@@ -190,9 +190,8 @@ module.exports = async function linkChecks({
   assert.match(await body().innerText(), /See \[\[Pricing sheet\]\]/);
 
   // One page's connections, opened from the page itself.
-  await page
-    .getByRole("button", { name: "Show this page's connections" })
-    .click();
+  await page.getByRole("button", { name: "Page options", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Show connections", exact: true }).click();
   await page.locator(".graph-canvas svg").waitFor();
   await tab("Graph · Vendor call").waitFor();
   assert.equal(
@@ -282,13 +281,11 @@ module.exports = async function linkChecks({
   );
   await saved();
   await tab("Corridor chat").waitFor();
-  await page
-    .getByRole("button", { name: "Find commitments on this page" })
-    .click();
+  await page.getByRole("button", { name: "Page options", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Find commitments", exact: true }).click();
   await page.getByText(/2 commitments proposed from this page/).waitFor();
-  await page
-    .getByRole("button", { name: "Find commitments on this page" })
-    .click();
+  await page.getByRole("button", { name: "Page options", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Find commitments", exact: true }).click();
   await page.getByText(/Nothing new here/).waitFor();
   await clickPage(page, "Actions");
   await page.getByRole("tab", { name: /Review/ }).click();
@@ -312,6 +309,7 @@ module.exports = async function linkChecks({
   await clickPage(page, "Notes");
 
   // Four pages open, on the one we were last reading.
+  await page.locator(".note-tab.active").waitFor();
   assert.equal(await page.getByRole("tab").count(), 4);
   assert.equal(
     await page.locator(".note-tab.active").innerText(),
@@ -339,5 +337,6 @@ module.exports = async function linkChecks({
   );
   await page.getByRole("button", { name: "Close Vendor call" }).click();
   assert.equal(await page.getByRole("tab").count(), 0);
-  await page.locator(".blank-page").waitFor();
+  // With nothing open, the page list takes the space.
+  await page.locator(".note-library").waitFor();
 };

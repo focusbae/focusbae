@@ -26,6 +26,20 @@ English-only here because Parakeet TDT v3 has no Hindi.
 | `ami-farfield` | AMI meetings, table-top array microphone 1, 2 meetings | A laptop microphone in a room |
 | `libri-clean` | LibriSpeech test-clean, 40 utterances | Clean read-speech baseline |
 | `fleurs-hi` | FLEURS Hindi dev, 40 utterances | Hindi support |
+| `edacc-<group>` | EdAcc conversational English, 15 utterances per accent group across speakers: `indian`, `us`, `uk-ireland`, `african`, `caribbean`, `european-l2`, `asian-l2` | English across accents, the first priority for teams (owner, 2026-10-21) |
+
+## Cloud engines (processing level 3)
+
+`deepgram` (Nova-3) and `elevenlabs` (Scribe) send each clip to the provider. Keys go in
+`qualification/.env` (git-ignored; see `qualification/.env.example`); the model can be
+changed with `DEEPGRAM_MODEL` / `ELEVENLABS_STT_MODEL`. Their speed includes the network.
+Only the public benchmark clips are sent.
+
+```bash
+python3 qualification/speech/prepare.py --only edacc   # the accent sets alone
+node qualification/speech/bench.cjs --engines deepgram,elevenlabs \
+  --sets edacc-indian,edacc-us,edacc-uk-ireland,edacc-african,edacc-caribbean,edacc-european-l2,edacc-asian-l2,ami-headset,ami-farfield,libri-clean
+```
 
 AMI clips are 12–30 s, cut at pauses of at least 0.4 s so no reference word is split.
 Fillers (uh, um, mm-hmm, …) are removed from both reference and hypothesis; English
@@ -49,5 +63,7 @@ numbers are spelled out before scoring.
 - **LibriSpeech** — CC BY 4.0, V. Panayotov, G. Chen, D. Povey, S. Khudanpur
   (`openslr.org/12`).
 - **FLEURS** — CC BY 4.0, Google (`huggingface.co/datasets/google/fleurs`).
+- **EdAcc** — CC BY-SA 4.0, R. Sanabria et al., The Edinburgh International Accents of
+  English Corpus (`huggingface.co/datasets/edinburghcstr/edacc`).
 
 Downloaded data and results stay local and are never committed.

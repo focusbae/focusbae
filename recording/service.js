@@ -53,6 +53,12 @@ function publicRecording(record) {
     diarization: record.metadata?.diarization ?? null,
     gaps: record.metadata?.gaps ?? [],
     microphones: record.metadata?.microphones ?? [],
+    // "cloud" when the person chose Deepgram (level 3) for this recording; the badge.
+    processing: record.metadata?.processing ?? "local",
+    // Team workspaces: the team that sees action items accepted from this recording;
+    // null is Only me (TEAM_PLAN §4).
+    shareWith: record.metadata?.teamSpaceId ?? null,
+    processingNote: record.metadata?.processingNote ?? null,
     aiState: record.aiState,
   };
 }
@@ -112,6 +118,14 @@ class RecordingService extends EventEmitter {
     speech = null,
     model = null,
     createEngine = null,
+    // (store) => null, or { token, policy } when this workspace may transcribe in the
+    // cloud right now (team service: level 3 allowed, account connected).
+    cloudSpeech = null,
+    // (store) => null, or a commitment extractor using OpenAI (level 2 or higher).
+    cloudAI = null,
+    // (store) => null, or { privateSpaceId, options } in a team workspace: the teams a
+    // recording's accepted action items can be shared with.
+    teamSpaces = null,
     legacyBusy = () => false,
     clock = () => performance.now(),
     startTimeout = 15000,
@@ -145,6 +159,9 @@ class RecordingService extends EventEmitter {
       extractor,
       diarizer,
       speech,
+      cloudSpeech,
+      cloudAI,
+      teamSpaces,
     });
     // Readiness is per recording language; see recording/speech.js for routing.
     this.model =
@@ -189,6 +206,23 @@ class RecordingService extends EventEmitter {
       { ...changes, metadata: { ...old.metadata, ...changes.metadata } },
     );
   }
+  // Validates a "Share with" choice: null, My notes and a team the person can add to.
+  // My notes is stored as null, so it never depends on that space's id.
+  teamSpace(store, value) {
+    if (value == null) return null;
+    const id = v.uuid(value, "team");
+    const targets = this.teamSpaces?.(store);
+    check(targets?.options.some((s) => s.id === id), "INVALID_INPUT", "You can't share with that team");
+    return id === targets.privateSpaceId ? null : id;
+  }
+  // Changing it later moves the recording's shared action items with it on the next sync.
+  setShareWith(workspaceId, id, value) {
+    const store = this.catalog.scoped(workspaceId);
+    const teamSpaceId = this.teamSpace(store, value);
+    const saved = this.update({ store, id: v.uuid(id) }, { metadata: { teamSpaceId } });
+    this.emitChange();
+    return publicRecording(saved);
+  }
   start(input) {
     v.object(input, [
       "context",
@@ -199,6 +233,8 @@ class RecordingService extends EventEmitter {
       "consent",
       "keepAudio",
       "microphone",
+      "processing",
+      "shareWith",
     ]);
     const store = this.catalog.scoped(input.context.workspaceId);
     // The microphone chosen in the record dialog, by name; null follows the Mac's
@@ -213,11 +249,18 @@ class RecordingService extends EventEmitter {
     v.choice(input.sourceMode, ["microphone", "system", "both"], "source");
     v.choice(input.language, ["english", "hindi", "mixed"], "language");
     const keepAudio = v.boolean(input.keepAudio ?? false, "keepAudio");
+    // Processing levels (TEAM_PLAN §3), only where the workspace allows them:
+    // "cloud-ai" (2) has OpenAI find commitments in the transcript text; "cloud" (3) also
+    // transcribes with Deepgram.
+    const processing = v.choice(input.processing ?? "local", ["local", "cloud-ai", "cloud"], "processing");
+    check(processing === "local" || (processing === "cloud" ? this.cloudSpeech?.(store) : this.cloudAI?.(store)),
+      "CLOUD_UNAVAILABLE", "Cloud processing isn't available for this workspace right now");
     check(
       input.consent === true,
       "CONSENT_REQUIRED",
       "Confirm participant consent and temporary local audio storage",
     );
+    const teamSpaceId = this.teamSpace(store, input.shareWith);
     v.object(input.destination, ["kind", "noteId"]);
     v.choice(
       input.destination.kind,
@@ -265,7 +308,7 @@ class RecordingService extends EventEmitter {
           retainedAudio: keepAudio,
           participantConsent: true,
         },
-        metadata: { localCaptureVersion: 1, language: input.language },
+        metadata: { localCaptureVersion: 1, language: input.language, processing, teamSpaceId },
       });
       const noteId =
         input.destination.kind === "today"
@@ -325,7 +368,7 @@ class RecordingService extends EventEmitter {
     return publicRecording(recording);
   }
   validateImport(input) {
-    v.object(input, ["context", "purpose", "destination", "language", "keepAudio", "consent"]);
+    v.object(input, ["context", "purpose", "destination", "language", "keepAudio", "consent", "shareWith"]);
     const store = this.catalog.scoped(input.context.workspaceId);
     v.choice(input.purpose, ["conversation", "personal", "learning"], "purpose");
     v.choice(input.language, ["english", "hindi", "mixed"], "language");
@@ -336,6 +379,7 @@ class RecordingService extends EventEmitter {
     if (input.destination.kind === "note")
       store.get(scope(store), "note", v.uuid(input.destination.noteId));
     else check(input.destination.noteId === undefined, "INVALID_INPUT", "Unexpected note ID");
+    this.teamSpace(store, input.shareWith);
     return store;
   }
   guardImport() {
@@ -361,7 +405,8 @@ class RecordingService extends EventEmitter {
         sourceMode: "microphone",
         keepAudio,
         consent: { version: 1, acknowledgedAt: new Date().toISOString(), importedAudio: true },
-        metadata: { localCaptureVersion: 1, importedWavVersion: 1, language: input.language, originalName: displayName },
+        metadata: { localCaptureVersion: 1, importedWavVersion: 1, language: input.language, originalName: displayName,
+          teamSpaceId: this.teamSpace(store, input.shareWith) },
       });
       const noteId = input.destination.kind === "today"
         ? store.dailyNote(mutation(store)).id : input.destination.noteId;
@@ -678,7 +723,7 @@ class RecordingService extends EventEmitter {
     }
     const language = session.spool?.manifest.language ?? "english";
     await this.speech?.prepare().catch(() => {});
-    if (!this.closing && failure !== "disk" && this.model(language).ready) {
+    if (!this.closing && failure !== "disk" && (this.model(language).ready || this.cloudFor(session.store, this.current(session)))) {
       try {
         await this.retry(session.id);
       } catch {
@@ -686,6 +731,10 @@ class RecordingService extends EventEmitter {
       }
     }
     return publicRecording(this.current(session));
+  }
+  // Deepgram access for a recording that chose cloud transcription, if still allowed.
+  cloudFor(store, record) {
+    return record?.metadata?.processing === "cloud" ? this.cloudSpeech?.(store) ?? null : null;
   }
   async retry(id) {
     // Probe engine availability first; the checks below then run without awaiting.
@@ -711,8 +760,9 @@ class RecordingService extends EventEmitter {
     );
     if (record.transcriptionState === "complete" && spool.manifest.purged)
       return Promise.resolve(publicRecording(record));
+    const cloud = this.cloudFor(store, record);
     check(
-      this.model(spool.manifest.language).ready,
+      cloud || this.model(spool.manifest.language).ready,
       "MODEL_MISSING",
       spool.manifest.language === "english"
         ? "Transcription needs Apple speech (macOS 26) or the Parakeet download"
@@ -723,11 +773,14 @@ class RecordingService extends EventEmitter {
       store,
       spool,
       cancelled: false,
-      engine: this.createEngine({
-        language: spool.manifest.language,
-        directory: spool.directory,
-      }),
+      engine: cloud
+        ? new (require("./deepgram").DeepgramEngine)({ language: spool.manifest.language, ...cloud })
+        : this.createEngine({ language: spool.manifest.language, directory: spool.directory }),
     };
+    // Chosen for the cloud but no longer allowed (signed out, Strict Local, admin
+    // lowered the level): transcribed on this Mac instead, and the recording says so.
+    if (!cloud && record.metadata.processing === "cloud")
+      this.update(task, { metadata: { processingNote: "Cloud transcription wasn't available, so this Mac transcribed it." } });
     this.processing = task;
     task.promise = this.process(task).finally(async () => {
       try {
@@ -856,12 +909,22 @@ class RecordingService extends EventEmitter {
         diarization = { status: "failed", reason: error.code ?? "FAILED" };
       }
       let extraction = { proposed: 0 };
+      // Cloud AI (level 2+) when this recording chose it and it is still allowed;
+      // otherwise the on-device model, and the recording says so.
+      const wantsCloudAI = ["cloud-ai", "cloud"].includes(this.current(task).metadata?.processing);
+      const cloudExtractor = wantsCloudAI ? this.cloudAI?.(store) : null;
+      if (wantsCloudAI && !cloudExtractor)
+        this.update(task, { metadata: { processingNote: "Cloud AI wasn't available, so this Mac found the commitments." } });
+      const { extractActions } = require("../workspace/action-extraction");
       try {
-        extraction = await require("../workspace/action-extraction").extractActions(
-          store,
-          id,
-          this.extractor,
-        );
+        try {
+          extraction = await extractActions(store, id, cloudExtractor ?? this.extractor);
+        } catch (error) {
+          // A cloud failure (network, limit, sign-out mid-way) falls back to this Mac.
+          if (!cloudExtractor) throw error;
+          this.update(task, { metadata: { processingNote: "Cloud AI didn't finish, so this Mac found the commitments." } });
+          extraction = await extractActions(store, id, this.extractor);
+        }
       } catch (error) {
         extraction = { proposed: 0, failed: true, reason: error.code ?? "FAILED" };
       }

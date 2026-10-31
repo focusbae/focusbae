@@ -1,6 +1,6 @@
 {
   "name": "focusbae-electron",
-  "version": "1.3.4",
+  "version": "1.4.0",
   "description": "FocusBae — local-first notes, meetings, and actions on your Mac",
   "author": "Prateek Saxena",
   "main": "local-first-main.js",
@@ -17,7 +17,7 @@
     "rebuild": "electron-rebuild",
     "postinstall": "electron-builder install-app-deps",
     "dist": "npm run build:workspace && electron-builder --config scripts/release-candidate.config.cjs --mac --publish never",
-    "test": "npm run test:capture && npm run test:local && npm run test:workspace && npm run test:recording && npm run test:models",
+    "test": "npm run test:capture && npm run test:local && npm run test:workspace && npm run test:recording && npm run test:models && npm run test:team",
     "test:privacy": "node tests/privacy/run-electron.cjs",
     "test:local:network": "node tests/privacy/run-electron.cjs",
     "test:local": "node --test tests/local-first/*.test.js",
@@ -27,7 +27,9 @@
     "build:embedding": "bash local-ai/apple-embedding/build.sh",
     "qualify:extraction": "node qualification/extraction/score.js",
     "build:extract": "bash local-ai/apple-extract/build.sh",
-    "build:fluid": "bash local-ai/fluid-helpers/build.sh"
+    "build:fluid": "bash local-ai/fluid-helpers/build.sh",
+    "test:team": "node --test tests/team/*.test.js",
+    "test:local:network:team": "FOCUSBAE_TEAM_URL=http://localhost:3000 node tests/privacy/run-electron.cjs"
   },
   "dependencies": {
     "better-sqlite3": "13.0.3",

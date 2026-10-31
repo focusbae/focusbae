@@ -15,6 +15,9 @@ import {
   Redo2,
   Pin,
   FolderPlus,
+  Folder,
+  UsersRound,
+  LockKeyhole,
   MoreHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
@@ -23,7 +26,6 @@ import {
   RotateCcw,
   Plus,
   Search,
-  Upload,
   Download,
   X,
   ChevronLeft,
@@ -145,54 +147,46 @@ function LinkDialog({ editor, close }) {
   );
 }
 
-function FolderDialog({ mode, folder, parentPath, close, submit }) {
+function FolderDialog({ mode, folder, folders = [], parentPath, close, submit }) {
   const ref = useRef(null);
   const [name, setName] = useState(mode === "rename" ? folder.name : "");
-  useEffect(() => {
-    ref.current.showModal();
-  }, []);
-  const heading = mode === "rename" ? "Rename folder" : "New folder";
-  return (
-    <dialog ref={ref} className="folder-dialog" aria-label={heading} onCancel={close}>
-      <form
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (!name.trim()) return;
-          submit(name.trim());
-          close();
-        }}
-      >
-        <div className="dialog-heading">
-          <h2>{heading}</h2>
-          <Tool label={`Close ${heading.toLowerCase()} dialog`} icon={X} onClick={close} />
-        </div>
+  const [parent, setParent] = useState(folder?.parentId ?? "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  useEffect(() => { ref.current.showModal(); }, []);
+  const heading = mode === "move" ? "Move folder" : mode === "rename" ? "Rename folder" : "New folder";
+  const excluded = new Set(folder ? [folder.id] : []);
+  for (let size = -1; excluded.size !== size;) {
+    size = excluded.size;
+    for (const f of folders) if (excluded.has(f.parentId)) excluded.add(f.id);
+  }
+  return <dialog ref={ref} className="folder-dialog" aria-label={heading} onCancel={close}>
+    <form onSubmit={async (event) => {
+      event.preventDefault(); setSaving(true); setError(null);
+      try { await submit(mode === "move" ? parent || null : name.trim()); close(); }
+      catch (failure) { setError(failure.message); }
+      finally { setSaving(false); }
+    }}>
+      <div className="dialog-heading"><h2>{heading}</h2><Tool label="Close folder dialog" icon={X} onClick={close} /></div>
+      {mode === "move" ? <>
+        <label htmlFor="folder-parent">Move “{folder.name}” into</label>
+        <select id="folder-parent" value={parent} onChange={(e) => setParent(e.target.value)}>
+          <option value="">{folders.some((f) => f.teamRoot) ? "My notes" : "Top level"}</option>
+          {folders.filter((f) => !excluded.has(f.id) && f.writable !== false).map((f) => <option key={f.id} value={f.id}>{f.path}</option>)}
+        </select>
+        <p className="dialog-note">Moving between teams changes the home audience. Additional shares and guest access remain.</p>
+      </> : <>
         <label htmlFor="folder-name">Name</label>
-        <input
-          id="folder-name"
-          autoFocus
-          maxLength={200}
-          value={name}
-          onChange={(event) => setName(event.target.value)}
-          placeholder="For example, Clients"
-        />
-        {mode === "create" && (
-          <p className="dialog-note">
-            {parentPath ? `Inside ${parentPath}` : "At the top level"}
-          </p>
-        )}
-        <div className="dialog-actions">
-          <button type="button" onClick={close}>
-            Cancel
-          </button>
-          <button type="submit" className="primary" disabled={!name.trim()}>
-            {mode === "rename" ? "Rename" : "Create folder"}
-          </button>
-        </div>
-      </form>
-    </dialog>
-  );
+        <input id="folder-name" autoFocus maxLength={200} value={name} onChange={(e) => setName(e.target.value)} placeholder="For example, Clients" />
+        {mode === "create" && <p className="dialog-note">{parentPath ? `Inside ${parentPath}` : "At the top level"}</p>}
+      </>}
+      {error && <p role="alert" className="dialog-note danger">{error}</p>}
+      <div className="dialog-actions"><button type="button" onClick={close}>Cancel</button><button type="submit" className="primary" disabled={saving || (mode !== "move" && !name.trim())}>{saving ? "Saving…" : mode === "create" ? "Create folder" : heading}</button></div>
+    </form>
+  </dialog>;
 }
-function FolderMenu({ folder, busy, create, rename, remove }) {
+// A small "…" menu: closes on a click elsewhere, on Escape, and after a choice.
+function useMenu() {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   useEffect(() => {
@@ -212,6 +206,10 @@ function FolderMenu({ folder, busy, create, rename, remove }) {
     setOpen(false);
     fn();
   };
+  return { open, setOpen, ref, pick };
+}
+function FolderMenu({ folder, busy, create, rename, move, remove }) {
+  const { open, setOpen, ref, pick } = useMenu();
   return (
     <span className="folder-menu" ref={ref}>
       <Tool
@@ -227,16 +225,39 @@ function FolderMenu({ folder, busy, create, rename, remove }) {
           <button type="button" role="menuitem" onClick={pick(create)}>
             New folder inside
           </button>
-          <button type="button" role="menuitem" onClick={pick(rename)}>
-            Rename
-          </button>
-          <button type="button" role="menuitem" className="danger" onClick={pick(remove)}>
-            Remove folder
-          </button>
+          {!folder.teamRoot && <>
+            <button type="button" role="menuitem" onClick={pick(rename)}>Rename</button>
+            <button type="button" role="menuitem" onClick={pick(move)}>Move folder…</button>
+            <button type="button" role="menuitem" className="danger" onClick={pick(remove)}>Remove folder</button>
+          </>}
         </span>
       )}
     </span>
   );
+}
+function PageMenu({ finding, findCommitments, showConnections, exportNote, remove }) {
+  const { open, setOpen, ref, pick } = useMenu();
+  return <span className="folder-menu page-menu" ref={ref}>
+    <Tool label="Page options" icon={MoreHorizontal} aria-expanded={open} aria-haspopup="menu" onClick={() => setOpen(!open)} />
+    {open && <span className="folder-menu-list" role="menu" aria-label="Page options">
+      <button type="button" role="menuitem" disabled={finding} onClick={pick(findCommitments)}>Find commitments</button>
+      <button type="button" role="menuitem" onClick={pick(showConnections)}>Show connections</button>
+      <button type="button" role="menuitem" onClick={pick(exportNote)}>Export page…</button>
+      {remove && <button type="button" role="menuitem" className="danger" onClick={pick(remove)}>Move to Trash</button>}
+    </span>}
+  </span>;
+}
+function LibraryMenu({ busy, pinned, trash, importNotes, exportAll }) {
+  const { open, setOpen, ref, pick } = useMenu();
+  return <span className="folder-menu library-menu" ref={ref}>
+    <Tool label="More page options" icon={MoreHorizontal} disabled={busy} aria-expanded={open} aria-haspopup="menu" onClick={() => setOpen(!open)} />
+    {open && <span className="folder-menu-list" role="menu" aria-label="More page options">
+      <button type="button" role="menuitem" onClick={pick(pinned)}>Pinned pages</button>
+      <button type="button" role="menuitem" onClick={pick(trash)}>Trash</button>
+      <button type="button" role="menuitem" onClick={pick(importNotes)}>Import notes…</button>
+      <button type="button" role="menuitem" onClick={pick(exportAll)}>Export all notes…</button>
+    </span>}
+  </span>;
 }
 function DiscardDialog({ close, reload }) {
   const ref = useRef(null);
@@ -318,6 +339,9 @@ function LinkSuggestions({ items, highlight, coords, choose }) {
 // What this note points at, and what points back. Both come from the same derived
 // table the graph reads, so the panel and the graph never disagree.
 function LinkPanel({ note, version, openNote, openLink, openPerson }) {
+  // In a teammate's page, a title that names no page you can see may name one you
+  // cannot: it keeps their words but never offers to create a page of yours.
+  const restricted = !!note.team;
   const [links, setLinks] = useState(null);
   useEffect(() => {
     let current = true;
@@ -341,18 +365,20 @@ function LinkPanel({ note, version, openNote, openLink, openPerson }) {
             {links.outgoing.map((link) => (
               <li key={`${link.kind}:${link.label}`}>
                 <button
-                  className={`link-chip ${link.resolved ? "" : "unresolved"}`}
+                  className={`link-chip ${link.resolved ? "" : restricted ? "restricted" : "unresolved"}`}
+                  title={!link.resolved && restricted ? "Restricted page: you can't open it. It may be private, or not written yet." : undefined}
                   onClick={() =>
                     link.kind === "person"
                       ? openPerson(link.id)
                       : link.resolved
                         ? openNote(link.id)
-                        : openLink(link.label)
+                        : openLink(link.label, { restricted })
                   }
                 >
                   {link.kind === "person" && <UserRound size={12} />}
+                  {!link.resolved && restricted && <LockKeyhole size={11} />}
                   {link.label}
-                  {!link.resolved && <span className="hint">create</span>}
+                  {!link.resolved && !restricted && <span className="hint">create</span>}
                 </button>
               </li>
             ))}
@@ -387,6 +413,7 @@ function LinkPanel({ note, version, openNote, openLink, openPerson }) {
 
 function NoteEditor({
   note,
+  teamWorkspaceId,
   folders,
   moveNote,
   pagesHidden,
@@ -429,7 +456,7 @@ function NoteEditor({
   const [rewriting, setRewriting] = useState(false);
   // The editor is created once, so these read the current props and state.
   const follow = useRef(null);
-  follow.current = (label) => openLink(label);
+  follow.current = (label) => openLink(label, { restricted: !!note.team });
   const keys = useRef(() => false);
   const queueRef = useRef(null);
   if (!queueRef.current)
@@ -447,9 +474,12 @@ function NoteEditor({
         }
       },
     });
+  // A teammate's page is read here, never written: co-editing comes later.
+  const teammate = note.team ?? null;
+  const locked = !!note.deletedAt || !!teammate;
   const queue = queueRef.current;
   const attachFiles = (items, position) => {
-    if (note.deletedAt || pendingPaste.current || !items.length) return;
+    if (locked || pendingPaste.current || !items.length) return;
     const selected = Array.from(items);
     if (selected.length > 20) { setError(new Error("Attach up to 20 files at a time.")); return; }
     setPasting(true);
@@ -493,7 +523,7 @@ function NoteEditor({
       NoteAttachment.configure({ workspaceId: note.workspaceId, noteId: note.id }),
     ],
     content: note.content,
-    editable: !note.deletedAt,
+    editable: !locked,
     editorProps: {
       attributes: {
         "aria-label": "Note body",
@@ -524,7 +554,7 @@ function NoteEditor({
           attachFiles(items);
           return true;
         }
-        if (pendingPaste.current || note.deletedAt) return true;
+        if (pendingPaste.current || locked) return true;
         const html = event.clipboardData?.getData("text/html");
         if (!html) return false;
         event.preventDefault();
@@ -597,7 +627,7 @@ function NoteEditor({
     };
   }, [queue, flushRef]);
   useEffect(() => {
-    if (!note.title && !note.deletedAt) titleRef.current?.focus();
+    if (!note.title && !locked) titleRef.current?.focus();
   }, []);
   // What the half-typed [[ could name. Asked for on every keystroke inside the
   // brackets, debounced, and dropped if a later query answers first.
@@ -746,26 +776,30 @@ function NoteEditor({
                     weekday: "long",
                     timeZone: "UTC",
                   }).format(new Date(`${note.dailyDate}T12:00:00Z`))
-                : "Notebook"}
+                : teammate
+                  ? <span className="note-owner"><LockKeyhole size={13} strokeWidth={1.7} />{teammate.arriving ? "Your page · its files are still arriving" : teammate.lostAccess ? "Your page · you can no longer edit it in this team" : teammate.authorName ? `${teammate.authorName}'s page` : "A teammate's page"}{teammate.spaceName ? ` · ${teammate.spaceName}` : ""}</span>
+                  : "Notebook"}
           </span>
-          {!note.deletedAt && note.kind !== "daily" && moveNote && folders.length > 0 && (
+          {!locked && note.kind !== "daily" && moveNote && folders.length > 0 && (
             <>
               <span className="note-folder-sep" aria-hidden="true">/</span>
               <select
               className="note-folder"
               aria-label="Folder for this page"
+              title={teamWorkspaceId ? "Location sets the home team. Additional shares and guest access are managed on the web." : "Move this page into a folder"}
               value={note.folderId ?? ""}
               onChange={(event) => moveNote(note, event.target.value || null)}
             >
-              <option value="">Unfiled</option>
+              <option value="">{teamWorkspaceId ? "My notes" : "Unfiled"}</option>
               {folders.map((folder) => (
-                <option key={folder.id} value={folder.id}>
+                <option key={folder.id} value={folder.id} disabled={folder.writable === false}>
                   {folder.path}
                 </option>
               ))}
             </select>
             </>
           )}
+          {!locked && teamWorkspaceId && <span className="note-home-hint" title="Location sets the home team. Additional shares and guest access remain until removed on the web.">Home location</span>}
         </div>
         <div className="note-actions">
           {!note.deletedAt && (
@@ -789,27 +823,12 @@ function NoteEditor({
             </>
           ) : (
             <>
-              <Tool
-                label="Find commitments on this page"
-                icon={ListChecks}
-                disabled={finding}
-                aria-busy={finding}
-                onClick={() => findCommitments(queue.note)}
-              />
-              <Tool
-                label="Show this page's connections"
-                icon={Network}
-                onClick={() => showConnections(queue.note)}
-              />
-              <Tool
-                label="Export this note"
-                icon={Download}
-                onClick={() => exportNote(queue.note)}
-              />
-              <Tool
-                label="Move note to Trash"
-                icon={Trash2}
-                onClick={() =>
+              <PageMenu
+                finding={finding}
+                findCommitments={() => findCommitments(queue.note)}
+                showConnections={() => showConnections(queue.note)}
+                exportNote={() => exportNote(queue.note)}
+                remove={teammate ? null : () =>
                   flushRef
                     .current()
                     .then((canonical) => remove(canonical))
@@ -829,13 +848,13 @@ function NoteEditor({
           placeholder="Untitled"
           maxLength={500}
           value={title}
-          readOnly={!!note.deletedAt}
+          readOnly={locked}
           onChange={(event) => {
             setTitle(event.target.value);
             queue.edit({ title: event.target.value });
           }}
         />
-        {!note.deletedAt && (
+        {!locked && (
           <div
             className="format-bar"
             role="toolbar"
@@ -948,7 +967,9 @@ function NoteEditor({
               ? "Rewriting on this Mac..."
               : note.deletedAt
                 ? "In Trash"
-                : status}
+                : teammate
+                  ? "Read only · only its author can edit it"
+                  : status}
         </div>
         {open && targets.length > 0 && suggestion?.coords && (
           <LinkSuggestions
@@ -996,6 +1017,7 @@ const GRAPH_KEY = "graph:graph";
 
 export function Notebook({
   workspace,
+  shared = null,
   today,
   refreshKey,
   flushRef,
@@ -1018,6 +1040,7 @@ export function Notebook({
   // null shows every note; "unfiled" shows the ones in no folder; otherwise a folder id.
   const [folderId, setFolderId] = useState(null);
   const [folders, setFolders] = useState({ items: [], unfiled: 0 });
+  const [expandedLocations, setExpandedLocations] = useState(() => new Set(["my-notes"]));
   const [folderDialog, setFolderDialog] = useState(null);
   // Hiding the page list leaves only the writing column. It only applies while a
   // page is open, so the list can never disappear with nothing to write in.
@@ -1111,13 +1134,17 @@ export function Notebook({
     }).catch(() => {});
   // Following a [[link]]. An unresolved one creates the page it names, which is how
   // a linked notebook grows: you write the link first and fill the page later.
-  const openLink = (label) =>
+  const openLink = (label, { restricted = false } = {}) =>
     act(async () => {
       const target = await unwrap(
         api.links.resolve({ workspaceId: workspace.id, label }),
       );
       if (target.kind === "person" && target.id) {
         openPerson?.(target.id);
+        return;
+      }
+      if (!target.id && restricted) {
+        setNotice(`Restricted page: you can't open "${label}". It may be private, or not written yet.`);
         return;
       }
       const note = target.id
@@ -1316,10 +1343,88 @@ export function Notebook({
       current = false;
     };
   }, [workspace.id, version, refreshKey]);
+  // A teammate's page has no local edits to protect, so their changes simply replace
+  // what is shown; a page that is no longer visible closes.
+  const openTeammateId = payload?.kind === "note" && payload.note.team ? payload.note.id : null;
+  useEffect(() => {
+    if (!openTeammateId || !refreshKey) return;
+    let current = true;
+    loadNote(openTeammateId)
+      .then((saved) => {
+        if (!current || saved.revision === payload.note.revision) return;
+        setPayload({ kind: "note", note: saved });
+        setEditorVersion((value) => value + 1);
+      })
+      .catch(() => current && setPayload(null));
+    return () => {
+      current = false;
+    };
+  }, [openTeammateId, refreshKey]);
   const selectedFolder =
     folderId && folderId !== "unfiled"
       ? folders.items.find((item) => item.id === folderId)
       : null;
+  const browseFolders = () => act(() => {
+    setPayload(null);
+    setActiveKey(null);
+    setQuery("");
+    setPagesHidden(false);
+    try { localStorage.setItem(PAGES_HIDDEN_KEY, "false"); } catch {}
+  }).catch(() => {});
+  const selectLocation = (nextFolder, nextView = "all") => {
+    setFolderId(nextFolder);
+    setView(nextView);
+    setOffset(0);
+  };
+  const folderChildren = new Map();
+  for (const folder of folders.items) {
+    const parent = folder.parentId ?? null;
+    folderChildren.set(parent, [...(folderChildren.get(parent) ?? []), folder]);
+  }
+  const folderTotals = new Map();
+  const totalInFolder = (folder, seen = new Set()) => {
+    if (folderTotals.has(folder.id)) return folderTotals.get(folder.id);
+    if (seen.has(folder.id)) return 0;
+    seen.add(folder.id);
+    const total = folder.notes + (folderChildren.get(folder.id) ?? []).reduce((sum, child) => sum + totalInFolder(child, seen), 0);
+    seen.delete(folder.id);
+    folderTotals.set(folder.id, total);
+    return total;
+  };
+  const myFolders = (folderChildren.get(null) ?? []).filter((folder) => !folder.teamRoot);
+  const teamFolders = (folderChildren.get(null) ?? []).filter((folder) => folder.teamRoot);
+  const toggleLocation = (id) => setExpandedLocations((current) => {
+    const next = new Set(current);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  const renderFolderBranch = (folder, depth = 0) => {
+    if (depth > 8) return null;
+    const children = folderChildren.get(folder.id) ?? [];
+    const open = expandedLocations.has(folder.id);
+    const Icon = folder.teamRoot ? UsersRound : Folder;
+    return <div className="location-branch" key={folder.id}>
+      <div className="location-row" style={{ paddingLeft: `${depth * 12}px` }}>
+        {children.length > 0 ? <button type="button" className="location-disclosure" aria-label={`${open ? "Collapse" : "Expand"} ${folder.name}`} aria-expanded={open} onClick={() => toggleLocation(folder.id)}>{open ? "⌄" : "›"}</button> : <span className="location-disclosure" />}
+        <button type="button" className="location-link" title={folder.path} aria-current={folderId === folder.id ? "page" : undefined} onClick={() => selectLocation(folder.id)}>
+          <Icon size={14} strokeWidth={1.6} /><span className="location-name">{folder.name}</span>{totalInFolder(folder) > 0 && <span className="location-count">{totalInFolder(folder)}</span>}
+        </button>
+      </div>
+      {open && children.map((child) => renderFolderBranch(child, depth + 1))}
+    </div>;
+  };
+  useEffect(() => {
+    if (!folderId || folderId === "unfiled") return;
+    const byId = new Map(folders.items.map((folder) => [folder.id, folder]));
+    const ancestors = [];
+    let folder = byId.get(folderId);
+    for (let depth = 0; folder && depth < 10; depth++) {
+      ancestors.push(folder.id);
+      if (!folder.parentId && !folder.teamRoot) ancestors.push("my-notes");
+      folder = folder.parentId ? byId.get(folder.parentId) : null;
+    }
+    setExpandedLocations((current) => new Set([...current, ...ancestors]));
+  }, [folderId, folders.items]);
   const createFolder = (name) =>
     act(async () => {
       const folder = await unwrap(
@@ -1331,7 +1436,7 @@ export function Notebook({
       setFolderId(folder.id);
       setOffset(0);
       refresh();
-    }).catch(() => {});
+    });
   const renameFolder = (name) =>
     act(async () => {
       await unwrap(
@@ -1342,7 +1447,11 @@ export function Notebook({
         }),
       );
       refresh();
-    }).catch(() => {});
+    });
+  const moveFolder = (parentId) => act(async () => {
+    await unwrap(api.folders.update({ context: context(workspace.id, selectedFolder.revision), id: selectedFolder.id, changes: { parentId } }));
+    refresh();
+  });
   const removeFolder = () => {
     act(async () => {
       const result = await unwrap(
@@ -1446,6 +1555,52 @@ export function Notebook({
       setNotice(method === "purge" ? "Note and attachments permanently deleted. Previous backups and exports are unchanged." : method === "delete" ? "Moved to Trash." : "Note restored.");
     }).catch(() => {});
   const selectedNoteId = payload?.kind === "note" ? payload.note.id : null;
+  const createNewNote = () => act(async () => {
+    const note = await unwrap(api.notes.create({ context: context(workspace.id), note: {
+      title: "", content: emptyDoc, ...(selectedFolder ? { folderId: selectedFolder.id } : {}),
+    } }));
+    showNote(note);
+    setView("all");
+    setQuery("");
+    setOffset(0);
+    refresh();
+  }).catch(() => {});
+  const importNotes = () => act(async () => {
+    const result = await unwrap(api.documents.import({ workspaceId: workspace.id }));
+    if (result.canceled) return;
+    refresh();
+    if (result.items[0]) {
+      showNote(result.items[0]);
+      setView("all");
+      setQuery("");
+    }
+    setNotice(`Imported ${result.items.length} ${result.items.length === 1 ? "note" : "notes"}.${result.failures.map((failure) => ` ${failure.name}: ${failure.message}`).join("")}`);
+  }).catch(() => {});
+  const errorBlock = error && (
+          <ErrorMessage
+            error={error}
+            retry={() => {
+              setError(null);
+              refresh();
+              if (today && !payload)
+                act(async () =>
+                  showNote(
+                    await unwrap(
+                      api.notes.daily({ context: context(workspace.id) }),
+                    ),
+                  ),
+                ).catch(() => {});
+            }}
+          />
+        );
+  // Shown in the open page, or above the page list when none is open (after moving a
+  // page to Trash, restoring one or importing).
+  const noticeBar = notice && (
+    <div className="notebook-notice" role="status">
+      <span>{notice}</span>
+      <Tool label="Dismiss notification" icon={X} onClick={() => setNotice("")} />
+    </div>
+  );
   return (
     <div
       className={`notebook ${today ? "daily-notebook" : ""} ${payload ? "has-selection" : ""} ${pagesHidden && !today ? "pages-hidden" : ""}`}
@@ -1454,38 +1609,20 @@ export function Notebook({
       {!today && (
         <section className="note-library" aria-label="Note library">
           <div className="library-heading">
-            <h2>Your pages</h2>
-            <Tool
-              label="Workspace graph"
-              icon={Network}
-              disabled={busy}
-              onClick={() => openGraph()}
-            />
+            {payload ? <button type="button" className="browse-folders" onClick={browseFolders} disabled={busy}><ArrowLeft size={14} />Browse folders</button> : <h2>{query ? "Search results" : selectedFolder?.name ?? (folderId === "unfiled" ? "My notes" : view === "pinned" ? "Pinned pages" : view === "trash" ? "Trash" : "All notes")}</h2>}
+            <span className="library-heading-actions">
+            <Tool label="Workspace graph" icon={Network} disabled={busy} onClick={() => openGraph()} />
+            <LibraryMenu busy={busy} pinned={() => selectLocation(null, "pinned")} trash={() => selectLocation(null, "trash")} importNotes={importNotes} exportAll={() => exportNote(null)} />
             <Tool
               label="New note"
               icon={Plus}
               disabled={busy}
-              onClick={() =>
-                act(async () => {
-                  const note = await unwrap(
-                    api.notes.create({
-                      context: context(workspace.id),
-                      note: {
-                        title: "",
-                        content: emptyDoc,
-                        ...(selectedFolder ? { folderId: selectedFolder.id } : {}),
-                      },
-                    }),
-                  );
-                  showNote(note);
-                  setView("all");
-                  setQuery("");
-                  setOffset(0);
-                  refresh();
-                }).catch(() => {})
-              }
+              onClick={createNewNote}
             />
+            </span>
           </div>
+          {!payload && !today && errorBlock}
+          {!payload && noticeBar}
           <div className="note-search">
             <Search size={16} />
             <input
@@ -1500,75 +1637,24 @@ export function Notebook({
               }}
             />
           </div>
-          <div className="library-filters">
-            {query ? (
-              <select
-                aria-label="Search mode"
-                value={searchMode}
-                onChange={(event) => setSearchMode(event.target.value)}
-              >
-                <option value="meaning">Meaning + words</option>
-                <option value="words">Exact words</option>
-              </select>
-            ) : (
-              <select
-                aria-label="Note view"
-                value={folderId ? `folder:${folderId}` : view}
-                onChange={(event) => {
-                  const value = event.target.value;
-                  if (value.startsWith("folder:")) {
-                    setFolderId(value.slice(7));
-                    setView("all");
-                  } else {
-                    setFolderId(null);
-                    setView(value);
-                  }
-                  setOffset(0);
-                }}
-              >
-                <option value="all">All notes</option>
-                <option value="pinned">Pinned</option>
-                {folders.items.length > 0 && (
-                  <optgroup label="Folders">
-                    {folders.items.map((folder) => (
-                      <option key={folder.id} value={`folder:${folder.id}`}>
-                        {folder.path}
-                      </option>
-                    ))}
-                    <option value="folder:unfiled">No folder</option>
-                  </optgroup>
-                )}
-                <option value="trash">Trash</option>
-              </select>
-            )}
-            {!query && (
-              <span className="library-folder-tools">
-                {selectedFolder ? (
-                  <FolderMenu
-                    folder={selectedFolder}
-                    busy={busy}
-                    create={() => setFolderDialog({ mode: "create" })}
-                    rename={() =>
-                      setFolderDialog({ mode: "rename", folder: selectedFolder })
-                    }
-                    remove={removeFolder}
-                  />
-                ) : (
-                  <Tool
-                    label="New folder"
-                    icon={FolderPlus}
-                    disabled={busy}
-                    onClick={() => setFolderDialog({ mode: "create" })}
-                  />
-                )}
-              </span>
-            )}
-            <span className="library-count">
-              {loading
-                ? "..."
-                : `${listing.mode === "lexical-fallback" ? "Words only · " : ""}${listing.total}${query && listing.total === 100 ? "+" : ""}`}
-            </span>
-          </div>
+          {query ? <div className="library-filters"><select aria-label="Search mode" value={searchMode} onChange={(event) => setSearchMode(event.target.value)}><option value="meaning">Meaning + words</option><option value="words">Exact words</option></select></div> : <nav className="library-locations" aria-label="Note locations">
+            <div className="library-quick-views">
+              <button type="button" aria-current={!folderId && view === "all" ? "page" : undefined} onClick={() => selectLocation(null)}><FileText size={14} />All pages</button>
+            </div>
+            <div className="locations-heading"><span>Locations</span><span className="library-folder-tools">
+              {selectedFolder && !selectedFolder.teamRoot && <FolderMenu folder={selectedFolder} busy={busy} create={() => setFolderDialog({ mode: "create" })} rename={() => setFolderDialog({ mode: "rename", folder: selectedFolder })} move={() => setFolderDialog({ mode: "move", folder: selectedFolder })} remove={removeFolder} />}
+              <Tool label="New folder" icon={FolderPlus} disabled={busy} onClick={() => setFolderDialog({ mode: "create" })} />
+            </span></div>
+            <div className="locations-tree">
+              <div className="location-row">
+                {myFolders.length > 0 ? <button type="button" className="location-disclosure" aria-label={`${expandedLocations.has("my-notes") ? "Collapse" : "Expand"} My notes`} aria-expanded={expandedLocations.has("my-notes")} onClick={() => toggleLocation("my-notes")}>{expandedLocations.has("my-notes") ? "⌄" : "›"}</button> : <span className="location-disclosure" />}
+                <button type="button" className="location-link" aria-current={folderId === "unfiled" ? "page" : undefined} onClick={() => selectLocation("unfiled")}><LockKeyhole size={14} strokeWidth={1.6} /><span className="location-name">My notes</span>{folders.unfiled > 0 && <span className="location-count">{folders.unfiled}</span>}</button>
+              </div>
+              {expandedLocations.has("my-notes") && myFolders.map((folder) => renderFolderBranch(folder, 1))}
+              {teamFolders.map((folder) => renderFolderBranch(folder))}
+            </div>
+          </nav>}
+          <div className="library-results-heading"><span>{query ? "Search results" : selectedFolder?.name ?? (folderId === "unfiled" ? "My notes" : view === "pinned" ? "Pinned" : view === "trash" ? "Trash" : "Recent pages")}</span><span>{loading ? "…" : `${listing.total}${query && listing.total === 100 ? "+" : ""}`}</span></div>
           <div className="note-rows">
             {loading ? (
               <p className="library-empty" role="status">
@@ -1632,34 +1718,6 @@ export function Notebook({
             </div>
           )}
           <div className="library-footer">
-            <Tool
-              label="Import notes"
-              icon={Upload}
-              disabled={busy}
-              onClick={() =>
-                act(async () => {
-                  const result = await unwrap(
-                    api.documents.import({ workspaceId: workspace.id }),
-                  );
-                  if (result.canceled) return;
-                  refresh();
-                  if (result.items[0]) {
-                    showNote(result.items[0]);
-                    setView("all");
-                    setQuery("");
-                  }
-                  setNotice(
-                    `Imported ${result.items.length} ${result.items.length === 1 ? "note" : "notes"}.${result.failures.map((failure) => ` ${failure.name}: ${failure.message}`).join("")}`,
-                  );
-                }).catch(() => {})
-              }
-            />
-            <Tool
-              label="Export all notes"
-              icon={Download}
-              disabled={busy}
-              onClick={() => exportNote(null)}
-            />
             <span>On this Mac</span>
           </div>
         </section>
@@ -1697,42 +1755,8 @@ export function Notebook({
             ))}
           </div>
         )}
-        {error && (
-          <ErrorMessage
-            error={error}
-            retry={() => {
-              setError(null);
-              refresh();
-              if (today && !payload)
-                act(async () =>
-                  showNote(
-                    await unwrap(
-                      api.notes.daily({ context: context(workspace.id) }),
-                    ),
-                  ),
-                ).catch(() => {});
-            }}
-          />
-        )}
-        {folderDialog && (
-          <FolderDialog
-            mode={folderDialog.mode}
-            folder={folderDialog.folder}
-            parentPath={folderDialog.mode === "create" ? selectedFolder?.path : null}
-            close={() => setFolderDialog(null)}
-            submit={folderDialog.mode === "rename" ? renameFolder : createFolder}
-          />
-        )}
-        {notice && (
-          <div className="notebook-notice" role="status">
-            <span>{notice}</span>
-            <Tool
-              label="Dismiss notification"
-              icon={X}
-              onClick={() => setNotice("")}
-            />
-          </div>
-        )}
+        {(payload || today) && errorBlock}
+        {(payload || today) && noticeBar}
         {payload?.kind === "graph" ? (
           <GraphView
             graph={payload.graph}
@@ -1774,6 +1798,7 @@ export function Notebook({
           <NoteEditor
             key={`${payload.note.id}:${editorVersion}`}
             note={payload.note}
+            teamWorkspaceId={shared ? workspace.id : null}
             folders={folders.items}
             moveNote={moveNote}
             pagesHidden={pagesHidden}
@@ -1808,12 +1833,7 @@ export function Notebook({
               }, true)
             }
             showBack={!today}
-            back={() =>
-              act(() => {
-                setPayload(null);
-                setActiveKey(null);
-              }).catch(() => {})
-            }
+            back={browseFolders}
           />
         ) : (
           <div className="blank-page">
@@ -1823,8 +1843,9 @@ export function Notebook({
                 ? busy
                   ? "Opening today..."
                   : "No page open"
-                : "Your notebook"}
+                : listing.items.length ? "Select a page" : "No pages here yet"}
             </p>
+            {!today && <><span className="blank-page-hint">{listing.items.length ? "Choose a page from the list, or start a new one." : "Create a page to start writing in this location."}</span><button type="button" className="blank-page-create" onClick={createNewNote}><Plus size={15} />New page</button></>}
             {today && !busy && (
               <button
                 onClick={() =>
@@ -1844,6 +1865,16 @@ export function Notebook({
           </div>
         )}
       </div>
+      {folderDialog && (
+        <FolderDialog
+          mode={folderDialog.mode}
+          folder={folderDialog.folder}
+          folders={folders.items}
+          parentPath={folderDialog.mode === "create" ? selectedFolder?.path : null}
+          close={() => setFolderDialog(null)}
+          submit={folderDialog.mode === "move" ? moveFolder : folderDialog.mode === "rename" ? renameFolder : createFolder}
+        />
+      )}
     </div>
   );
 }

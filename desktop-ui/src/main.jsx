@@ -32,6 +32,7 @@ import { Actions } from "./actions";
 import { People } from "./people";
 import { WelcomeNotice, WorkspaceGuide } from "./welcome";
 import { AppSettings } from "./app-settings";
+import { TeamSettings, useTeamWorkspaces } from "./team-settings";
 import {
   useRecording,
   RecordDialog,
@@ -332,7 +333,7 @@ function Overview({ page, workspace, refreshKey }) {
   );
 }
 
-function Preferences({ workspace, privacy, run, saved, models, openGuide, openClipboard, openWorkspace }) {
+function Preferences({ workspace, shared, privacy, run, saved, models, openGuide, openClipboard, openWorkspace, teamTarget }) {
   const [name, setName] = useState(workspace.name);
   const [theme, setTheme] = useState(workspace.preferences.theme);
   const [notificationsEnabled, setNotificationsEnabled] = useState(
@@ -462,8 +463,9 @@ function Preferences({ workspace, privacy, run, saved, models, openGuide, openCl
       <section aria-labelledby="local-storage-title">
         <h2 id="local-storage-title">Your work on this Mac</h2>
         <p className="storage-explanation">
-          Notes and transcripts save automatically in this workspace. No account
-          is needed. Cloud sync and automatic cloud backup are not available yet.
+          {shared
+            ? "Notes and attachments shared with your team sync through your connected account. Recordings and full transcripts stay on this Mac."
+            : "Notes and transcripts save automatically in this workspace. No account is needed. Cloud sync and automatic cloud backup are not available yet."}
         </p>
         <p className="storage-explanation muted">
           In Notes, choose Export all notes to keep a separate copy of your
@@ -473,6 +475,7 @@ function Preferences({ workspace, privacy, run, saved, models, openGuide, openCl
       </section>
       <AppleNotesImport key={`apple-${workspace.id}`} workspaceId={workspace.id} run={run} />
       <BackupSettings key={workspace.id} workspaceId={workspace.id} run={run} openWorkspace={openWorkspace} />
+      <TeamSettings openWorkspace={openWorkspace} target={teamTarget} />
       <section aria-labelledby="privacy-title">
         <h2 id="privacy-title">Privacy</h2>
         <div className="setting-row">
@@ -530,9 +533,9 @@ function Preferences({ workspace, privacy, run, saved, models, openGuide, openCl
 
 function App() {
   const [state, setState] = useState(null);
+  const teamBindings = useTeamWorkspaces();
   const [error, setError] = useState(null);
   const [page, setPage] = useState("Today");
-  const [collapsed, setCollapsed] = useState(false);
   const [creating, setCreating] = useState(false);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -540,6 +543,8 @@ function App() {
   const [selectedRecording, setSelectedRecording] = useState(null);
   const [actionTarget, setActionTarget] = useState(null);
   const [personTarget, setPersonTarget] = useState(null);
+  // A team workspace pointed out by a focusbae://team/connect link from the website.
+  const [teamTarget, setTeamTarget] = useState(null);
   const [initialNoteId, setInitialNoteId] = useState(null);
   // The notebook's open pages live here so they survive a visit to Actions.
   const [noteTabs, setNoteTabs] = useState([]);
@@ -686,8 +691,11 @@ function App() {
     run(() => unwrap(api.workspace.open({ workspaceId })))
       .then(() => navigate("Today"))
       .catch(setError);
-  commandHandler.current = async ({ name, id }) => {
-    if (name === "record") {
+  commandHandler.current = async ({ name, id, payload }) => {
+    if (name === "team-connect") {
+      setTeamTarget(payload?.workspace ?? null);
+      await navigate("Settings");
+    } else if (name === "record") {
       if (recording.state?.active || recording.state?.processingId || recording.state?.importing) await navigate("Recordings");
       else await beginRecording();
     } else if (name === "new-note") {
@@ -741,8 +749,9 @@ function App() {
       </main>
     );
   const { workspace, workspaces, privacy } = state;
+  const shared = teamBindings.get(workspace.id);
   return (
-    <div className={`app ${collapsed ? "collapsed" : ""}`}>
+    <div className="app horizontal-shell">
       <aside className="sidebar">
         <div className="brand">
           <img className="brand-mark" src={brandMark} alt="" />
@@ -768,6 +777,7 @@ function App() {
             {workspaces.map((item) => (
               <option key={item.id} value={item.id}>
                 {item.id === workspace.id ? workspace.name : item.name}
+                {teamBindings.has(item.id) ? " · team" : ""}
               </option>
             ))}
           </select>
@@ -785,7 +795,7 @@ function App() {
           </IconButton>
         </div>
         <nav aria-label="Workspace navigation">
-          {pages.map(([name, Icon]) => (
+          {pages.filter(([name]) => name !== "Settings").map(([name, Icon]) => (
             <button
               key={name}
               aria-current={page === name ? "page" : undefined}
@@ -804,37 +814,28 @@ function App() {
             <strong>
               {privacy.mode === "strict-local"
                 ? "Strict Local"
-                : "Local workspace"}
+                : shared ? "Team workspace" : "Local workspace"}
             </strong>
-            <span>On this Mac</span>
+            <span>{shared ? "On this Mac and your team" : "On this Mac"}</span>
           </div>
         </div>
       </aside>
       <div className="workspace-main">
         <header>
           <div className="page-name">
-            <IconButton
-              label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-              onClick={() => setCollapsed((value) => !value)}
-            >
-              {collapsed ? (
-                <PanelLeftOpen size={19} />
-              ) : (
-                <PanelLeftClose size={19} />
-              )}
-            </IconButton>
             <h1 ref={heading} tabIndex={-1}>
               {page}
             </h1>
           </div>
           <div className="header-actions">
+            <IconButton label="Settings" disabled={busy} aria-current={page === "Settings" ? "page" : undefined} onClick={() => navigate("Settings")}><Settings size={17} /></IconButton>
             <span className="save-indicator" role="status">
               {busy ? (
                 <LoaderCircle className="spin" size={15} />
               ) : (
                 <Check size={15} />
               )}
-              {busy ? "Saving..." : saved ? "Saved on this Mac" : "Local"}
+              {busy ? "Saving..." : saved ? "Saved on this Mac" : shared ? "On Mac" : "Local"}
             </span>
             <button
               className="record-button"
@@ -889,6 +890,7 @@ function App() {
             <Preferences
               key={workspace.id}
               workspace={workspace}
+              shared={shared}
               privacy={privacy}
               run={run}
               saved={saved}
@@ -896,6 +898,7 @@ function App() {
               openGuide={() => setWorkspaceGuide(true)}
               openClipboard={() => navigate("Clipboard history")}
               openWorkspace={switchWorkspace}
+              teamTarget={teamTarget}
             />
           ) : page === "Clipboard history" ? (
             <ClipboardHistory settings={() => navigate("Settings")} />
@@ -903,6 +906,7 @@ function App() {
             <Notebook
               key={`${workspace.id}:${page}`}
               workspace={workspace}
+              shared={shared}
               today={page === "Today"}
               refreshKey={state.sequence}
               flushRef={flushRef}
@@ -938,6 +942,11 @@ function App() {
           ) : page === "People" ? (
             <People
               key={`${workspace.id}:${personTarget ?? ""}`}
+              shared={shared}
+              openNote={(id) => {
+                setInitialNoteId(id);
+                setPage("Notes");
+              }}
               initialPersonId={personTarget}
               speakersReady={models ? !!models.diarization?.ready : undefined}
               setupModel={() => setModelDialog(true)}
@@ -956,6 +965,7 @@ function App() {
             <Actions
               key={`${workspace.id}:${actionTarget?.id ?? ""}`}
               workspace={workspace}
+              shared={shared}
               initial={actionTarget}
               refreshKey={state.sequence}
               openNote={(id) => {
@@ -981,7 +991,15 @@ function App() {
             <HardDrive size={13} />
             {workspace.name}
           </span>
-          <span>Stored locally</span>
+          <span>
+            {!shared
+              ? "Stored locally"
+              : privacy.mode === "strict-local"
+                ? "Offline — Strict Local"
+                : shared.status === "removed"
+                  ? "You were removed from this team workspace"
+                  : "Team pages sync when connected"}
+          </span>
         </footer>
       </div>
       {creating && (
@@ -996,6 +1014,7 @@ function App() {
       )}
       {recordDialog && (
         <RecordDialog
+          shared={!!shared}
           setupModel={() => {
             setModelDialog(true);
           }}

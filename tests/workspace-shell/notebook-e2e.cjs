@@ -2,6 +2,32 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+// The page list shows once no page is open.
+// With a page open, the list is either beside it (folders behind "Browse folders") or
+// hidden behind the page's "Back to notes".
+async function showLibrary(page) {
+  const notes = ".notebook:not(.daily-notebook)";
+  // Opening the Notes tab may still be restoring the last page; wait until the list
+  // is showing on its own.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await page.waitForFunction((sel) => document.querySelector(sel)?.getAttribute("aria-busy") === "false", notes);
+    await page.waitForTimeout(400);
+    if (!(await page.locator(`${notes}.has-selection`).count())) return;
+    const browse = page.locator(notes).getByRole("button", { name: "Browse folders", exact: true });
+    if (await browse.isVisible()) await browse.click();
+    else await page.locator(`${notes} .notebook-detail`).getByRole("button", { name: "Back to notes", exact: true }).click();
+    await page.waitForTimeout(200);
+  }
+  await page.locator(`${notes}:not(.has-selection)`).waitFor();
+}
+// The library's views: All pages is a button; Pinned pages and Trash are in its menu.
+async function libraryView(page, name) {
+  await showLibrary(page);
+  if (name === "All pages") return page.getByRole("button", { name, exact: true }).click();
+  await page.getByRole("button", { name: "More page options", exact: true }).click();
+  await page.getByRole("menuitem", { name, exact: true }).click();
+}
+
 module.exports = async function notebookChecks({
   app,
   page,
@@ -54,21 +80,20 @@ module.exports = async function notebookChecks({
   await page
     .getByRole("button", { name: "Back to notes", exact: true })
     .click();
-  await page.getByLabel("Note view").selectOption("pinned");
+  await libraryView(page, "Pinned pages");
   await page.locator(".note-rows").getByRole("button", { name: /Thoughts by the water/ }).waitFor();
   await page.getByLabel("Search workspace").fill("slowly");
   await page.locator(".note-rows").getByRole("button", { name: /Thoughts by the water/ }).click();
   assert.match(await body().innerText(), /Leave room/);
-  await page
-    .getByRole("button", { name: "Move note to Trash", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Page options", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Move to Trash", exact: true }).click();
   await page.getByText("Moved to Trash.", { exact: true }).waitFor();
   await page.getByLabel("Search workspace").fill("");
-  await page.getByLabel("Note view").selectOption("trash");
+  await libraryView(page, "Trash");
   await page.locator(".note-rows").getByRole("button", { name: /Thoughts by the water/ }).click();
   assert.equal(await body().getAttribute("contenteditable"), "false");
   await page.getByRole("button", { name: "Restore", exact: true }).click();
-  await page.getByLabel("Note view").selectOption("all");
+  await libraryView(page, "All pages");
   await page.locator(".note-rows").getByRole("button", { name: /Thoughts by the water/ }).click();
   // HTML clipboard conversion goes through the isolated, bounded main parser.
   await body().press("Meta+End");
@@ -112,7 +137,7 @@ module.exports = async function notebookChecks({
       filePaths: [file],
     });
   }, original);
-  await page.getByRole("button", { name: "Import notes", exact: true }).click();
+  await libraryView(page, "Import notes…");
   await page.waitForFunction(
     () =>
       document.querySelector('[aria-label="Note title"]')?.value ===
@@ -131,9 +156,8 @@ module.exports = async function notebookChecks({
       filePaths: [directory],
     });
   }, profile);
-  await page
-    .getByRole("button", { name: "Export this note", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Page options", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Export page…", exact: true }).click();
   await page.getByText(/Exported 1 note to/).waitFor();
   const folder = fs
     .readdirSync(profile)
@@ -293,26 +317,25 @@ module.exports = async function notebookChecks({
   await clickPage(page, "Notes");
   assert.equal(await page.getByLabel("Folder for this page", { exact: true }).count(), 0,
     "no folder control on a page until a folder exists");
+  await showLibrary(page);
   await page.getByRole("button", { name: "New folder", exact: true }).click();
   await page.getByLabel("Name", { exact: true }).waitFor();
   await page.screenshot({ path: path.join(output, `${packaged ? "packaged-" : ""}notebook-folder-dialog.png`) });
   await page.getByLabel("Name", { exact: true }).fill("Clients");
   await page.getByRole("button", { name: "Create folder", exact: true }).click();
-  await page.waitForFunction(
-    () => document.querySelector('[aria-label="Note view"]')?.selectedOptions[0]?.textContent === "Clients",
-  );
+  await page.locator('.location-link[aria-current="page"]', { hasText: "Clients" }).waitFor();
   await page.getByRole("button", { name: "New note", exact: true }).click();
   await page.waitForFunction(() => document.querySelector(".notebook")?.getAttribute("aria-busy") === "false");
   await title().fill("Acme kickoff");
   await saved();
-  const clientsId = (await page.getByLabel("Note view", { exact: true }).inputValue()).slice(7);
   assert.equal(
-    await page.getByLabel("Folder for this page", { exact: true }).inputValue(), clientsId,
+    await page.getByLabel("Folder for this page", { exact: true }).evaluate((select) => select.selectedOptions[0]?.textContent.trim()),
+    "Clients",
     "a page created inside a folder is filed there",
   );
-  await page.getByLabel("Note view", { exact: true }).selectOption("all");
+  await libraryView(page, "All pages");
   await page.waitForFunction(() => document.querySelectorAll(".note-row").length > 1);
-  await page.getByLabel("Note view", { exact: true }).selectOption({ label: "Clients" });
+  await page.locator(".location-link", { hasText: "Clients" }).click();
   await page.waitForFunction(
     () => document.querySelectorAll(".note-row").length === 1 &&
       document.querySelector(".note-row").textContent.includes("Acme kickoff"),
@@ -329,7 +352,7 @@ module.exports = async function notebookChecks({
     .locator(".notebook-notice")
     .filter({ hasText: "1 page moved out of any folder" })
     .waitFor();
-  assert.equal(await page.getByLabel("Note view", { exact: true }).inputValue(), "all");
+  assert.equal(await page.getByRole("button", { name: "All pages", exact: true }).getAttribute("aria-current"), "page");
   await page.waitForFunction(
     () => [...document.querySelectorAll(".note-row")].some((row) => row.textContent.includes("Acme kickoff")),
     undefined,
@@ -338,7 +361,8 @@ module.exports = async function notebookChecks({
   assert.equal(await page.getByLabel("Folder for this page", { exact: true }).count(), 0,
     "with the last folder gone, the page header is quiet again");
   // Focus writing: the page list steps aside, and the choice is remembered when
-  // Notes is opened again.
+  // Notes is opened again. The control belongs to an open page.
+  await page.locator(".note-row", { hasText: "Acme kickoff" }).click();
   await page.getByRole("button", { name: "Hide pages", exact: true }).click();
   await page.locator(".note-library").waitFor({ state: "hidden" });
   await screenshot("pages-hidden");

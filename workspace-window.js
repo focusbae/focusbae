@@ -34,7 +34,7 @@ let quitting = false;
 let pendingCommand = null;
 let clipboardHistory;
 let backups;
-const COMMANDS = new Set(["new-note", "record", "recordings", "actions", "settings", "clipboard"]);
+const COMMANDS = new Set(["new-note", "record", "recordings", "actions", "settings", "clipboard", "team-connect"]);
 const flushRequests = new Map();
 function flushPending() {
   if (!win || win.isDestroyed()) return Promise.resolve(true);
@@ -80,7 +80,7 @@ function assetPath(raw) {
   }
 }
 
-function initialize({ privacy, busy, desktopSettings, onRecordingChange = () => {} }) {
+function initialize({ privacy, busy, desktopSettings, onRecordingChange = () => {}, teamOptions = null }) {
   clipboardHistory = new (require("./workspace/clipboard-history").ClipboardHistory)(require("electron").clipboard);
   clipboardHistory.on("change", (value) => {
     if (win && !win.isDestroyed()) win.webContents.send("workspace:clipboard-event", value);
@@ -139,6 +139,11 @@ function initialize({ privacy, busy, desktopSettings, onRecordingChange = () => 
     extractor,
     diarizer,
     speech,
+    // Cloud transcription (level 3) for team workspaces that allow it; `team` is set
+    // up below and is only read when a recording starts or is transcribed.
+    cloudSpeech: (store) => team?.cloudSpeech(store) ?? null,
+    cloudAI: (store) => team?.cloudAI(store) ?? null,
+    teamSpaces: (store) => team?.shareTargets(store) ?? null,
   });
   const { ModelManager } = require("./recording/model-manager");
   models = new ModelManager({
@@ -191,7 +196,25 @@ function initialize({ privacy, busy, desktopSettings, onRecordingChange = () => 
   models.embedding = semantic;
   const attachments = new NoteAttachments(catalog);
   app.once("will-quit", () => attachments.close());
+  // Team workspaces exist only when the team service address is configured, and sync
+  // only after the person connects an account; until then nothing here touches the network.
+  let team = null;
+  if (teamOptions) {
+    const { TeamAccount } = require("./team/account");
+    const { SessionStore } = require("./team/session");
+    const { TeamService } = require("./team/service");
+    const account = new TeamAccount({
+      teamUrl: teamOptions.teamUrl,
+      sessions: new SessionStore(path.join(app.getPath("userData"), "team"), teamOptions.safeStorage),
+      policy: privacy.policy,
+      openExternal: teamOptions.openExternal,
+    });
+    team = new TeamService({ account, catalog, policy: privacy.policy });
+    ready().then(() => team.start()).catch(() => {});
+    app.once("will-quit", () => team.stop());
+  }
   registerWorkspaceIPC({
+    team,
     attachments,
     ipcMain,
     catalog,
@@ -225,13 +248,13 @@ function initialize({ privacy, busy, desktopSettings, onRecordingChange = () => 
   ready().then(() => reminders.start()).catch(() => {});
   return catalog;
 }
-function open(command) {
+function open(command, payload = null) {
   if (!catalog) return null;
   if (command !== undefined) {
     if (!COMMANDS.has(command)) throw new Error("Unknown workspace command");
     // Keep the latest navigation intent until the renderer is ready and its
     // current dialog/save is finished. Repeated shortcuts do not pile up notes.
-    pendingCommand = { id: randomUUID(), name: command };
+    pendingCommand = { id: randomUUID(), name: command, ...(payload ? { payload } : {}) };
   }
   if (win && !win.isDestroyed()) {
     win.show();

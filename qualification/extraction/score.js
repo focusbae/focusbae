@@ -40,18 +40,7 @@ const EXTRACTORS = {
   },
   // After "This is me": the account owner's speaker is "You", everyone else is an
   // anonymous detected speaker. Owners map self->self, a named person->other.
-  "apple-me": async (meeting) => {
-    const owner = meeting.accountOwner ?? "Me";
-    const names = new Map();
-    const segments = meeting.segments.map((segment) => {
-      if (!segment.speaker) return { ...segment, speaker: null };
-      if (segment.speaker === owner) return { ...segment, speaker: "You" };
-      if (!names.has(segment.speaker)) names.set(segment.speaker, `Speaker ${names.size + 1}`);
-      return { ...segment, speaker: names.get(segment.speaker) };
-    });
-    const found = await EXTRACTORS.apple({ ...meeting, accountOwner: "You", segments }, { raw: true });
-    return found.map((item) => ({ ...item, owner: ownerFor(item, segments) }));
-  },
+  "apple-me": (meeting) => asMe(meeting, (m) => EXTRACTORS.apple(m, { raw: true })),
   // Apple Foundation Models on-device (macOS 26+, Apple Intelligence enabled).
   // Build first with: bash local-ai/apple-extract/build.sh
   apple: async (meeting, { raw = false } = {}) => {
@@ -70,7 +59,37 @@ const EXTRACTORS = {
     if (raw) return found;
     return found.map((item) => ({ ...item, owner: ownerFor(item, meeting.segments, meeting.accountOwner ?? "Me") }));
   },
+  // Level 2 candidates (cloud.js): the same prompt sent to a cloud model, scored the same
+  // two ways as Apple's: with names as labelled, and as the app sees them after "This is me".
+  claude: (meeting) => cloudOwners(meeting, (m) => cloud.extract("anthropic", m, usage)),
+  "claude-me": (meeting) => asMe(meeting, (m) => cloud.extract("anthropic", m, usage)),
+  openai: (meeting) => cloudOwners(meeting, (m) => cloud.extract("openai", m, usage)),
+  "openai-me": (meeting) => asMe(meeting, (m) => cloud.extract("openai", m, usage)),
+  // An open model on this Mac (Qwen through Ollama), as open-source note-takers do.
+  qwen: (meeting) => cloudOwners(meeting, (m) => cloud.extract("ollama", m, usage)),
+  "qwen-me": (meeting) => asMe(meeting, (m) => cloud.extract("ollama", m, usage)),
 };
+
+const cloud = require("./cloud");
+const usage = { input: 0, output: 0, model: null };
+
+async function cloudOwners(meeting, run) {
+  const found = await run(meeting);
+  return found.map((item) => ({ ...item, owner: ownerFor(item, meeting.segments, meeting.accountOwner ?? "Me") }));
+}
+
+async function asMe(meeting, run) {
+  const owner = meeting.accountOwner ?? "Me";
+  const names = new Map();
+  const segments = meeting.segments.map((segment) => {
+    if (!segment.speaker) return { ...segment, speaker: null };
+    if (segment.speaker === owner) return { ...segment, speaker: "You" };
+    if (!names.has(segment.speaker)) names.set(segment.speaker, `Speaker ${names.size + 1}`);
+    return { ...segment, speaker: names.get(segment.speaker) };
+  });
+  const found = await run({ ...meeting, accountOwner: "You", segments });
+  return found.map((item) => ({ ...item, owner: ownerFor(item, segments) }));
+}
 
 // Applies the app's owner resolution (workspace/action-extraction.js resolveOwner)
 // using the speaker labels this transcript provides.
@@ -121,7 +140,9 @@ function load(dir) {
 }
 
 async function score(meetings, extract) {
-  const totals = { predicted: 0, expected: 0, truePositive: 0, ownerCorrect: 0, meetings: [] };
+  // Sets whose labels say what was promised but not who (AMI action items) mark
+  // "ownersLabelled": false; their matches count for finding, not for ownership.
+  const totals = { predicted: 0, expected: 0, truePositive: 0, ownerCorrect: 0, ownerScored: 0, ownerExpected: 0, meetings: [] };
   for (const meeting of meetings) {
     const predictions = await extract(meeting);
     const used = new Set();
@@ -136,13 +157,17 @@ async function score(meetings, extract) {
       }
       used.add(index);
       tp++;
-      if (predictions[index].owner === expected.owner) ownerCorrect++;
+      if (meeting.ownersLabelled !== false && predictions[index].owner === expected.owner) ownerCorrect++;
     }
     const falsePositives = predictions.filter((_, i) => !used.has(i)).map((p) => p.quote);
     totals.predicted += predictions.length;
     totals.expected += meeting.commitments.length;
     totals.truePositive += tp;
     totals.ownerCorrect += ownerCorrect;
+    if (meeting.ownersLabelled !== false) {
+      totals.ownerScored += tp;
+      totals.ownerExpected += meeting.commitments.length;
+    }
     totals.meetings.push({ id: meeting.id, source: meeting.source, predicted: predictions.length,
       expected: meeting.commitments.length, truePositive: tp, ownerCorrect, misses, falsePositives });
   }
@@ -151,9 +176,9 @@ async function score(meetings, extract) {
     ...totals,
     precision: ratio(totals.truePositive, totals.predicted),
     recall: ratio(totals.truePositive, totals.expected),
-    ownerAccuracy: ratio(totals.ownerCorrect, totals.truePositive),
+    ownerAccuracy: ratio(totals.ownerCorrect, totals.ownerScored),
     // Owner-correct commitments over all labelled ones: the number the ledger lives on.
-    endToEnd: ratio(totals.ownerCorrect, totals.expected),
+    endToEnd: ratio(totals.ownerCorrect, totals.ownerExpected),
   };
 }
 
@@ -177,8 +202,10 @@ async function main() {
   console.log(`extractor ${name} · ${meetings.length} transcripts (${sources})`);
   console.log(`precision ${pct(result.precision)} (${result.truePositive}/${result.predicted})`);
   console.log(`recall    ${pct(result.recall)} (${result.truePositive}/${result.expected})`);
-  console.log(`owner     ${pct(result.ownerAccuracy)} of matched (${result.ownerCorrect}/${result.truePositive})`);
+  console.log(`owner     ${pct(result.ownerAccuracy)} of matched (${result.ownerCorrect}/${result.ownerScored})`);
   console.log(`end-to-end ${pct(result.endToEnd)} of labelled commitments found with the right owner`);
+  if (usage.model) console.log(`model ${usage.model} · ${usage.input} input + ${usage.output} output tokens`);
+  if (args.includes("--quiet")) return;
   for (const m of result.meetings) {
     for (const quote of m.misses) console.log(`  miss  [${m.id}] ${quote}`);
     for (const quote of m.falsePositives) console.log(`  false [${m.id}] ${quote}`);

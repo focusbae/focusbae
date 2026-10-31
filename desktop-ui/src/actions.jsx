@@ -15,6 +15,7 @@ import {
   LoaderCircle,
   BellOff,
 } from "lucide-react";
+import { TeamShare } from "./team-share";
 import "./actions.css";
 const api = window.focusbaeWorkspace;
 const views = [
@@ -247,7 +248,7 @@ function NewAction({ workspaceId, close, created }) {
   );
 }
 // `initial` opens a specific action (from People) in its list view.
-export function Actions({ workspace, refreshKey, openRecording, openNote, initial }) {
+export function Actions({ workspace, refreshKey, openRecording, openNote, initial, shared = null }) {
   const [view, setView] = useState(initial?.view ?? "mine");
   const [listing, setListing] = useState(null);
   const [selectedId, setSelectedId] = useState(initial?.id ?? null);
@@ -358,7 +359,11 @@ export function Actions({ workspace, refreshKey, openRecording, openNote, initia
         <div className="action-library-heading">
           <div>
             <h2>Actions</h2>
-            <p className="muted">Stored in {workspace.name}</p>
+            <p className="muted">
+              {shared
+                ? `Shared with ${shared.name}: accepted actions and their quotes are visible to your team`
+                : `Stored in ${workspace.name}`}
+            </p>
           </div>
           <Tool
             label="New action"
@@ -483,6 +488,8 @@ export function Actions({ workspace, refreshKey, openRecording, openNote, initia
                     ? "AI suggestion"
                     : action.origin === "local-model"
                       ? "On-device AI suggestion"
+                      : action.origin === "cloud-model"
+                        ? "Cloud AI suggestion"
                       : action.origin === "local-rule"
                         ? "Local suggestion"
                         : "Created by you"}
@@ -509,6 +516,15 @@ export function Actions({ workspace, refreshKey, openRecording, openNote, initia
               />
             </div>
             <Fields value={draft} setValue={setDraft} disabled={busy} />
+            {shared && (
+              <TeamShare
+                workspaceId={workspace.id}
+                actionId={action.id}
+                status={action.status}
+                teamName={shared.name}
+                disabled={busy}
+              />
+            )}
             {error && (
               <p className="action-error" role="alert">
                 {error.message}

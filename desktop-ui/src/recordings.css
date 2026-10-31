@@ -160,6 +160,14 @@
   border-bottom: 1px solid var(--line);
 }
 .recording-original { overflow-wrap: anywhere; }
+.recording-facts .recording-share {
+  font: inherit;
+  color: var(--text, inherit);
+  padding: 0 4px;
+  min-height: 0;
+  height: auto;
+  max-width: 220px;
+}
 .recording-warning {
   font-size: 12px;
   border-left: 2px solid #b9767e;
@@ -413,3 +421,15 @@ ul.recording-warning {
   min-width: 0;
 }
 .recording-gaps { margin: 8px 0 0; font-size: 12px; }
+
+.record-destination {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.move-workspace {
+  max-width: 200px;
+  height: 30px;
+  font-size: 13px;
+}

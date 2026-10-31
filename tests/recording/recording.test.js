@@ -861,3 +861,111 @@ test("a microphone that never delivers audio at the start is retried once as the
   await f.service.stop(r.id);
   assert.equal(f.service.detail(r.workspaceId, r.id).recording.state, "captured");
 });
+
+test("a recording chosen for cloud transcription uses Deepgram while allowed, and this Mac once it is not", async (t) => {
+  const { LocalPolicy } = require("../../privacy/local-policy");
+  const policy = new LocalPolicy();
+  policy.setTeamConnected(true);
+  let allowed = false;
+  const sent = [];
+  const cloud = {
+    policy,
+    token: async () => ({ accessToken: "short-lived", expiresAt: new Date(Date.now() + 600000).toISOString() }),
+    fetchImpl: async (url, init) => {
+      sent.push(init.headers.authorization);
+      return { ok: true, status: 200, json: async () => ({ results: { channels: [{ alternatives: [{ transcript: "Words from Deepgram" }] }] } }) };
+    },
+  };
+  const f = await fixture(t, { cloudSpeech: () => (allowed ? cloud : null), cloudAI: () => null });
+  assert.throws(() => f.service.start(f.input({ processing: "cloud" })), { code: "CLOUD_UNAVAILABLE" });
+
+  allowed = true; // no on-device model is needed for the cloud
+  const record = f.service.start(f.input({ processing: "cloud" }));
+  await turn();
+  f.sources.microphone.emit("audio", tone(5));
+  await f.service.stop(record.id);
+  await until(() => !f.service.busy());
+  const detail = f.service.detail(record.workspaceId, record.id);
+  assert.equal(detail.recording.processing, "cloud");
+  assert.equal(detail.recording.transcriptionState, "complete");
+  assert.ok(detail.transcript.every((s) => s.text === "Words from Deepgram"));
+  assert.ok(sent.length > 0 && sent.every((h) => h === "Bearer short-lived"));
+  assert.equal(f.calls(), 0, "the on-device engine was not used");
+
+  f.modelReady();
+  const sentBefore = sent.length;
+  const later = f.service.start(f.input({ processing: "cloud" }));
+  await turn();
+  f.sources.microphone.emit("audio", tone(5));
+  allowed = false; // signed out, Strict Local, or the admin lowered the level meanwhile
+  await f.service.stop(later.id);
+  await until(() => !f.service.busy());
+  const fallback = f.service.detail(later.workspaceId, later.id);
+  assert.match(fallback.recording.processingNote, /wasn't available, so this Mac/);
+  assert.ok(f.calls() > 0, "transcribed on this Mac instead");
+  assert.equal(sent.length, sentBefore, "and nothing more went to Deepgram");
+});
+
+test("cloud AI (level 2) finds commitments in the transcript text, and this Mac takes over if it fails", async (t) => {
+  const asked = [];
+  let fail = false;
+  const cloudAI = {
+    origin: "cloud-model",
+    extract: async ({ owner, segments }) => {
+      asked.push({ owner, count: segments.length });
+      if (fail) throw Object.assign(new Error("Cloud AI is unavailable"), { code: "REMOTE" });
+      return [{ segmentId: segments[0].id, quote: "I will send the deck on Friday", owner: "unknown", person: "" }];
+    },
+  };
+  const f = await fixture(t, { cloudAI: () => cloudAI, createEngine: () => ({
+    load: async () => {}, dispose: async () => {},
+    transcribe: async () => ({ content: "I will send the deck on Friday." }),
+  }) });
+  f.modelReady();
+  const run = async () => {
+    const record = f.service.start(f.input({ processing: "cloud-ai", purpose: "conversation" }));
+    await turn();
+    f.sources.microphone.emit("audio", tone(5));
+    await f.service.stop(record.id);
+    await until(() => !f.service.busy());
+    return f.service.detail(record.workspaceId, record.id);
+  };
+  const detail = await run();
+  assert.equal(detail.recording.processing, "cloud-ai");
+  assert.ok(asked.length >= 1, "the transcript text went to the cloud extractor");
+  const store = f.catalog.store;
+  const origins = store._db.prepare("SELECT json_extract(data_json, '$.origin') AS origin FROM actions").all().map((r) => r.origin);
+  assert.ok(origins.includes("cloud-model"), `suggestions are marked as cloud: ${origins}`);
+  assert.equal(detail.recording.processingNote, null);
+
+  fail = true;
+  const fallback = await run();
+  assert.match(fallback.recording.processingNote, /Cloud AI didn't finish, so this Mac found the commitments/);
+  assert.equal(fallback.recording.aiState, "complete");
+});
+
+test("Share with: a recording keeps the team chosen for it, Only me by default", async (t) => {
+  const targets = { privateSpaceId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", options: [
+    { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", kind: "private", name: "My notes" },
+    { id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", kind: "custom", name: "Sales" },
+  ] };
+  const f = await fixture(t, { teamSpaces: () => targets });
+  f.modelReady();
+  const plain = f.service.start(f.input());
+  assert.equal(plain.shareWith, null, "Only me unless chosen");
+  await f.service.stop(plain.id);
+  await until(() => !f.service.busy());
+  assert.throws(() => f.service.start(f.input({ shareWith: "cccccccc-cccc-4ccc-8ccc-cccccccccccc" })), /can't share with that team/);
+  const sales = f.service.start(f.input({ shareWith: targets.options[1].id }));
+  assert.equal(sales.shareWith, targets.options[1].id);
+  await f.service.stop(sales.id);
+  await until(() => !f.service.busy());
+  const moved = f.service.setShareWith(plain.workspaceId, plain.id, targets.privateSpaceId);
+  assert.equal(moved.shareWith, null, "My notes is stored as Only me");
+  assert.equal(f.service.setShareWith(plain.workspaceId, plain.id, targets.options[1].id).shareWith, targets.options[1].id);
+});
+
+test("Share with is refused outside team workspaces", async (t) => {
+  const f = await fixture(t);
+  assert.throws(() => f.service.start(f.input({ shareWith: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" })), /can't share with that team/);
+});

@@ -100,12 +100,23 @@ const methods = {
       const next = normalize({ displayName: old.displayName, mediaType: old.mediaType, noteId: old.noteId, recordingId: old.recordingId, previewId: old.previewId, ...data });
       check(next.noteId === old.noteId && next.recordingId === old.recordingId, 'SCOPE_MISMATCH', 'Attachments cannot be moved between parents');
       check(next.previewId !== id, 'INVALID_INPUT', 'An attachment cannot preview itself');
+      if (old.noteId) this._ownNote(this._raw('note', old.noteId));
       validateParents(this, next);
       return next;
     });
   },
 
-  putAttachment(ctx, input, bytes) {
+  putAttachment(ctx, input, bytes) { return this._putAttachment(ctx, input, bytes); },
+
+  // A file of a teammate's page, kept under the id the team service uses for it.
+  _mirrorAttachment(noteId, { id, displayName, mediaType }, bytes) {
+    const existing = this._raw('attachment', v.uuid(id));
+    if (existing) return existing;
+    return this._putAttachment({ workspaceId: this._identity.id, clientRequestId: randomUUID() },
+      { noteId, displayName, mediaType }, bytes, { id, mirror: true });
+  },
+
+  _putAttachment(ctx, input, bytes, { id = null, mirror = false } = {}) {
     this._scope(ctx, true);
     const data = normalize(input);
     check(Buffer.isBuffer(bytes), 'INVALID_INPUT', 'Attachment must be a buffer');
@@ -115,7 +126,8 @@ const methods = {
     const { previous } = this._request(ctx, 'attachment.put', args);
     if (previous) return JSON.parse(previous.result_json);
     validateParents(this, data);
-    const record = this._new({ ...data, contentHash, byteSize: bytes.length });
+    if (data.noteId && !mirror) this._ownNote(this._raw('note', data.noteId));
+    const record = { ...this._new({ ...data, contentHash, byteSize: bytes.length }), ...(id ? { id } : {}) };
     record.relativePath = `attachments/${record.id}-${contentHash}.blob`;
     const temporaryPath = `attachments/.staging/${record.id}.tmp`;
     // File intent is durable before the first write. Metadata and its ACK commit only after the file is flushed.

@@ -66,7 +66,7 @@ global.workspaceProbe = {
   handlers,
   shortcuts,
   trayMenu: () => trayMenu,
-  openCommand: (name) => require("../workspace-window").open(name),
+  openCommand: (name, payload) => require("../workspace-window").open(name, payload),
   authorizeModelPermission: () => require("../privacy/local-runtime").policy.authorize("models"),
   // Models setup with synthetic pinned folders and a scripted Apple speech state, so
   // the settings flow exercises real verification, staging and permission checks.

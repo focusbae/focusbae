@@ -1,5 +1,8 @@
 "use strict";
-// Speech engine benchmark (Apple speech and Parakeet).
+// Speech engine benchmark: Apple speech and Parakeet on the Mac, and the cloud engines
+// considered for processing level 3 (TEAM_PLAN §3): Deepgram Nova-3 and ElevenLabs
+// Scribe. Cloud keys come from qualification/.env (git-ignored; this repo is public):
+//   DEEPGRAM_API_KEY, ELEVENLABS_API_KEY; models via DEEPGRAM_MODEL, ELEVENLABS_STT_MODEL.
 //   ELECTRON_RUN_AS_NODE=1 node_modules/electron/dist/Electron.app/Contents/MacOS/Electron \
 //     qualification/speech/bench.cjs --engines apple,parakeet --fluidaudio <path>
 // Results are cached per clip in qualification/speech/results/<engine>.jsonl.
@@ -17,6 +20,27 @@ const DATA = path.join(__dirname, "data");
 const RESULTS = path.join(__dirname, "results");
 const args = process.argv.slice(2);
 const option = (name, fallback) => (args.includes(name) ? args[args.indexOf(name) + 1] : fallback);
+try { process.loadEnvFile(path.join(__dirname, "../.env")); } catch {}
+
+function key(name) {
+  if (!process.env[name]) throw new Error(`${name} is not set (put it in qualification/.env)`);
+  return process.env[name];
+}
+
+// Cloud engines are timed from request to answer, so their speed includes the network.
+async function timedFetch(url, init) {
+  const started = process.hrtime.bigint();
+  for (let attempt = 0; ; attempt++) {
+    const response = await fetch(url, init);
+    if ((response.status === 429 || response.status >= 500) && attempt < 4) {
+      await new Promise((resolve) => setTimeout(resolve, 2000 * 2 ** attempt));
+      continue;
+    }
+    const body = await response.json();
+    if (!response.ok) throw new Error(`${response.status} ${JSON.stringify(body).slice(0, 200)}`);
+    return { body, ms: Number(process.hrtime.bigint() - started) / 1e6 };
+  }
+}
 
 
 function timed(command, argv) {
@@ -40,10 +64,70 @@ const ENGINES = {
       return { text, ms: r.ms, rssMb: r.rssMb };
     },
   },
+  // Batch, pre-recorded. Language is given for English and Hindi; code-mixed speech
+  // uses Deepgram's multilingual mode.
+  deepgram: {
+    languages: ["en", "hi", "mixed"],
+    async run(item) {
+      const language = { en: "en", hi: "hi", mixed: "multi" }[item.lang];
+      const model = process.env.DEEPGRAM_MODEL || "nova-3";
+      const { body, ms } = await timedFetch(`https://api.deepgram.com/v1/listen?model=${model}&smart_format=true&language=${language}`, {
+        method: "POST", headers: { authorization: `Token ${key("DEEPGRAM_API_KEY")}`, "content-type": "audio/wav" },
+        body: fs.readFileSync(item.file),
+      });
+      return { text: body.results?.channels?.[0]?.alternatives?.[0]?.transcript ?? "", ms, rssMb: 0 };
+    },
+  },
+  elevenlabs: {
+    languages: ["en", "hi", "mixed"],
+    async run(item) {
+      const form = new FormData();
+      form.append("model_id", process.env.ELEVENLABS_STT_MODEL || "scribe_v1");
+      if (item.lang !== "mixed") form.append("language_code", item.lang === "hi" ? "hin" : "eng");
+      form.append("tag_audio_events", "false");
+      form.append("file", new Blob([fs.readFileSync(item.file)], { type: "audio/wav" }), path.basename(item.file));
+      const { body, ms } = await timedFetch("https://api.elevenlabs.io/v1/speech-to-text", {
+        method: "POST", headers: { "xi-api-key": key("ELEVENLABS_API_KEY") }, body: form,
+      });
+      return { text: body.text ?? "", ms, rssMb: 0 };
+    },
+  },
+  // Qwen3-ASR 0.6B on this Mac through MLX (what OpenOats ships). One long-lived worker
+  // keeps the model loaded, as the app's helpers do; set up with
+  //   python3 -m venv qualification/speech/.venv && qualification/speech/.venv/bin/pip install mlx-qwen3-asr
+  "qwen3-asr": {
+    languages: ["en", "hi", "mixed"],
+    async run(item) {
+      const worker = await qwenWorker();
+      const language = { en: "English", hi: "Hindi", mixed: null }[item.lang];
+      const out = await worker.ask({ file: item.file, language });
+      if (out.error) throw new Error(`qwen3-asr: ${out.error}`);
+      return { text: out.text, ms: out.ms, rssMb: 0 };
+    },
+  },
   apple: appleEngine({ en: "en-US", hi: "hi-IN", mixed: "hi-IN" }),
   // Indian English locale, for Indian-accented English and code-mixed speech.
   "apple-en-in": appleEngine({ en: "en-IN", mixed: "en-IN" }),
 };
+let qwen = null;
+function qwenWorker() {
+  if (qwen) return qwen;
+  const { spawn } = require("node:child_process");
+  const readline = require("node:readline");
+  const child = spawn(path.join(__dirname, ".venv/bin/python"), [path.join(__dirname, "qwen_asr_worker.py")], { stdio: ["pipe", "pipe", "inherit"] });
+  const lines = readline.createInterface({ input: child.stdout });
+  const waiting = [];
+  lines.on("line", (line) => waiting.shift()?.(JSON.parse(line)));
+  qwen = new Promise((resolve, reject) => {
+    child.once("error", reject);
+    waiting.push(() => resolve({
+      ask: (request) => new Promise((answer) => { waiting.push(answer); child.stdin.write(JSON.stringify(request) + "\n"); }),
+      close: () => child.stdin.end(),
+    }));
+  });
+  return qwen;
+}
+
 function appleEngine(locales) {
   return {
     languages: Object.keys(locales),
@@ -157,6 +241,7 @@ async function main() {
       process.stderr.write(`${engine} ${item.set}/${item.id} ${record.error ? "ERROR " + record.error : Math.round(record.ms) + "ms"}\n`);
     }
   }
+  if (qwen) (await qwen).close();
   report(manifest);
 }
 
@@ -224,4 +309,4 @@ if (require.main === module) {
   else main().catch((error) => { console.error(error); process.exit(1); });
 }
 
-module.exports = { normalize, edits, romanKey };
+module.exports = { normalize, edits, romanKey, ENGINES };

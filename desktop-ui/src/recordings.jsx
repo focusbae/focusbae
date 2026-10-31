@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { RecordingShare, ShareWithField, useShareTargets } from "./share-with";
 import {
   Mic,
   Square,
@@ -14,6 +15,7 @@ import {
   Download,
   Upload,
   Copy,
+  FolderInput,
 } from "lucide-react";
 import "./recordings.css";
 import { AudioPlayer } from "./audio-player";
@@ -121,6 +123,7 @@ export function useRecording() {
 }
 export function RecordDialog({
   workspace,
+  shared,
   status,
   close,
   started,
@@ -134,6 +137,38 @@ export function RecordDialog({
   const [consent, setConsent] = useState(false);
   const [keepAudio, setKeepAudio] = useState(false);
   const [notes, setNotes] = useState([]);
+  // Cloud processing this team workspace allows (TEAM_PLAN §3): the admin's highest
+  // level is the default, and the person can keep this recording on the Mac.
+  const [cloud, setCloud] = useState({ speech: false, ai: false });
+  const [processing, setProcessing] = useState("local");
+  const shareTargets = useShareTargets(workspace.id);
+  const [shareWith, setShareWith] = useState("");
+  // Recording into an existing team page: its action items go to that page's team.
+  useEffect(() => {
+    if (!shareTargets || ["today", "standalone"].includes(destination)) { setShareWith(""); return; }
+    let alive = true;
+    unwrap(api.team.noteVisibility({ workspaceId: workspace.id, noteId: destination }))
+      .then((value) => {
+        if (!alive) return;
+        const team = shareTargets.options.some((s) => s.id === value.spaceId && s.kind !== "private");
+        setShareWith(team ? value.spaceId : "");
+      })
+      .catch(() => alive && setShareWith(""));
+    return () => { alive = false; };
+  }, [destination, shareTargets, workspace.id]);
+  useEffect(() => {
+    let current = true;
+    unwrap(api.capture.cloud({ workspaceId: workspace.id }))
+      .then((value) => {
+        if (!current) return;
+        setCloud(value);
+        setProcessing(value.speech ? "cloud" : value.ai ? "cloud-ai" : "local");
+      })
+      .catch(() => {});
+    return () => {
+      current = false;
+    };
+  }, [workspace.id]);
   // The chosen microphone is remembered on this Mac by name; empty follows the
   // Mac's default input, which switches to AirPods or a headset when they connect.
   const [microphone, setMicrophone] = useState(() => {
@@ -199,6 +234,8 @@ export function RecordDialog({
                 language,
                 consent,
                 keepAudio,
+                processing,
+                ...(shareTargets ? { shareWith: shareWith || null } : {}),
                 microphone: source === "system" ? null : microphone || null,
                 destination: ["today", "standalone"].includes(destination)
                   ? { kind: destination }
@@ -214,7 +251,15 @@ export function RecordDialog({
         }}
       >
         <div className="dialog-heading">
-          <h2>New recording</h2>
+          <div>
+            <h2>New recording</h2>
+            {/* Every recording belongs to one workspace; say which, plainly, so a client
+                call is not saved into the wrong company's workspace (TEAM_PLAN §6.6). */}
+            <p className="record-destination">
+              Saving to <strong>{workspace.name}</strong>
+              {shared ? " · team workspace" : " · on this Mac only"}
+            </p>
+          </div>
           <Tool
             label="Close recording dialog"
             icon={X}
@@ -307,6 +352,30 @@ export function RecordDialog({
           <option value="hindi">Hindi</option>
           <option value="mixed">English + Hindi (experimental)</option>
         </select>
+        {(cloud.speech || cloud.ai) && (
+          <>
+            <label htmlFor="capture-processing">Processing</label>
+            <select
+              id="capture-processing"
+              value={processing}
+              disabled={busy}
+              onChange={(event) => setProcessing(event.target.value)}
+            >
+              {cloud.speech && <option value="cloud">Cloud: Deepgram transcribes, OpenAI finds commitments</option>}
+              {cloud.ai && <option value="cloud-ai">Cloud AI: OpenAI finds commitments in the transcript</option>}
+              <option value="local">This Mac only</option>
+            </select>
+            {processing !== "local" && (
+              <p className="capture-permission">
+                {processing === "cloud"
+                  ? "Audio goes from this Mac to Deepgram, not through FocusBae, and Deepgram doesn't train on it. "
+                  : "Audio stays on this Mac. "}
+                The transcript text goes to OpenAI through FocusBae to find commitments; neither keeps it.
+                Your workspace allows this.
+              </p>
+            )}
+          </>
+        )}
         <label htmlFor="capture-destination">Save with</label>
         <select
           id="capture-destination"
@@ -322,6 +391,7 @@ export function RecordDialog({
             </option>
           ))}
         </select>
+        <ShareWithField id="capture-share" targets={shareTargets} value={shareWith} onChange={setShareWith} disabled={busy} />
         <label className="consent-row retention-choice">
           <input type="checkbox" checked={keepAudio} disabled={busy}
             onChange={(event) => setKeepAudio(event.target.checked)} />
@@ -333,7 +403,7 @@ export function RecordDialog({
           unless you delete it. Recent uncommitted audio may be lost if the app
           stops unexpectedly.
         </p>}
-        {!speechReady(status, language) && (
+        {processing !== "cloud" && !speechReady(status, language) && (
           <>
             <p className="model-status">
               {language === "english"
@@ -390,6 +460,8 @@ function ImportAudioDialog({ workspace, close, imported }) {
   const [notes, setNotes] = useState([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  const shareTargets = useShareTargets(workspace.id);
+  const [shareWith, setShareWith] = useState("");
   useEffect(() => {
     ref.current.showModal();
     let alive = true;
@@ -405,6 +477,7 @@ function ImportAudioDialog({ workspace, close, imported }) {
         const result = await unwrap(api.capture.importWav({
           context: { workspaceId: workspace.id, clientRequestId: crypto.randomUUID() },
           purpose, language, keepAudio, consent,
+          ...(shareTargets ? { shareWith: shareWith || null } : {}),
           destination: ["today", "standalone"].includes(destination)
             ? { kind: destination } : { kind: "note", noteId: destination },
         }));
@@ -428,6 +501,7 @@ function ImportAudioDialog({ workspace, close, imported }) {
         <option value="today">Today's note</option><option value="standalone">Recordings only</option>
         {notes.map((note) => <option key={note.id} value={note.id}>{note.title || "Untitled"}</option>)}
       </select>
+      <ShareWithField id="import-share" targets={shareTargets} value={shareWith} onChange={setShareWith} disabled={busy} />
       <label className="consent-row retention-choice"><input type="checkbox" checked={keepAudio} disabled={busy}
         onChange={(event) => setKeepAudio(event.target.checked)} /><span>Keep audio for playback<small>If turned off, FocusBae removes its copy after transcription. Your original WAV is unchanged.</small></span></label>
       <label className="consent-row"><input type="checkbox" checked={consent} disabled={busy}
@@ -642,6 +716,7 @@ export function Recordings({
 }) {
   const [list, setList] = useState(null);
   const [detail, setDetail] = useState(null);
+  const shareTargets = useShareTargets(workspace.id);
   const [offset, setOffset] = useState(0);
   const [segmentOffset, setSegmentOffset] = useState(0);
   const [error, setError] = useState(null);
@@ -703,6 +778,26 @@ export function Recordings({
       .then((value) => current && setStorage(value)).catch(() => current && setStorage(null));
     return () => { current = false; };
   }, [workspace.id, selectedId, revision, attempt]);
+  // Other workspaces on this Mac a finished recording can move to (TEAM_PLAN §6.6).
+  const [elsewhere, setElsewhere] = useState([]);
+  const [moving, setMoving] = useState(false);
+  useEffect(() => {
+    let current = true;
+    unwrap(api.workspace.list()).then((all) => current && setElsewhere(all.filter((w) => w.id !== workspace.id))).catch(() => {});
+    return () => { current = false; };
+  }, [workspace.id]);
+  const move = async (targetWorkspaceId) => {
+    setMoving(false);
+    setBusy(true);
+    setError(null);
+    try {
+      if (await unwrap(api.capture.move({ workspaceId: workspace.id, id: selectedId, targetWorkspaceId }))) select(null);
+    } catch (failure) {
+      setError(failure);
+    } finally {
+      setBusy(false);
+    }
+  };
   const run = async (method) => {
     if (method === "discard") player.current?.pause();
     setBusy(true);
@@ -819,6 +914,12 @@ export function Recordings({
               <span>{sourceName[record.sourceMode]}</span>
               <span>{record.state}</span>
               <span>{time(record.durationMs)}</span>
+              {/* Every recording says where it was transcribed (TEAM_PLAN §3). */}
+              <span className="processing-badge" title={{ cloud: "Transcribed by Deepgram; commitments found by OpenAI", "cloud-ai": "Transcribed on this Mac; commitments found by OpenAI" }[record.processing] ?? "Processed on this Mac"}>
+                {{ cloud: "Deepgram + OpenAI", "cloud-ai": "OpenAI commitments" }[record.processing] ?? "On this Mac"}
+              </span>
+              <RecordingShare workspaceId={workspace.id} record={record} targets={shareTargets}
+                saved={(recording) => setDetail((old) => (old ? { ...old, recording: { ...old.recording, ...recording } } : old))} />
               {record.microphones?.length > 0 && <span title="Microphone used">{record.microphones.join(", then ")}</span>}
               {record.originalName && <span className="recording-original" title={record.originalName}>Original: {record.originalName}</span>}
             </div>
@@ -859,6 +960,18 @@ export function Recordings({
                   </p>
                 </div>
                 <div className="processing-tools">
+                  {elsewhere.length > 0 && ["captured", "interrupted", "failed"].includes(record.state) && (
+                    moving ? (
+                      <select aria-label="Move to workspace" className="move-workspace" autoFocus defaultValue=""
+                        onChange={(event) => event.target.value && move(event.target.value)} onBlur={() => setMoving(false)}>
+                        <option value="" disabled>Move to…</option>
+                        {elsewhere.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+                      </select>
+                    ) : (
+                      <Tool label="Move to another workspace" icon={FolderInput}
+                        disabled={busy || !!status?.active || !!status?.processingId} onClick={() => setMoving(true)} />
+                    )
+                  )}
                   {hasAudio && record.transcriptionState !== "complete" &&
                     !speechReady(status, record.language) && (
                       <button type="button" onClick={setupModel}>
@@ -899,6 +1012,7 @@ export function Recordings({
               </div>
             )}
             {canPlay && <AudioPlayer key={`${workspace.id}:${selectedId}`} ref={player} workspaceId={workspace.id} id={selectedId} />}
+            {record.processingNote && <p className="capture-permission">{record.processingNote}</p>}
             {record.processingError &&
               record.transcriptionState !== "complete" && (
                 <p className="recording-warning">{record.processingError}</p>

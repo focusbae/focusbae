@@ -87,6 +87,8 @@ stats_backup.json
 
 # Consented real transcripts for extraction qualification; never commit
 /qualification/extraction/gold/private/
+/qualification/extraction/gold/ami/
 /local-ai/fluid-helpers/.build/
 /qualification/speech/data/
 /qualification/speech/results/
+/qualification/speech/.venv/

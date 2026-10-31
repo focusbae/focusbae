@@ -37,11 +37,10 @@ async function launch(expectReady = true) {
     await page.getByRole("heading", { name: "Today", exact: true }).waitFor();
   return page;
 }
+// Pages are tabs in the workspace navigation; Settings is the gear in the top bar.
 async function clickPage(page, name) {
-  await page
-    .getByRole("navigation")
-    .getByRole("button", { name, exact: true })
-    .click();
+  const scope = name === "Settings" ? page.locator(".header-actions") : page.getByRole("navigation");
+  await scope.getByRole("button", { name, exact: true }).click();
 }
 (async () => {
   let page = await launch();

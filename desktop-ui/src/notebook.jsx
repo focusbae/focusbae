@@ -1576,6 +1576,31 @@ export function Notebook({
     }
     setNotice(`Imported ${result.items.length} ${result.items.length === 1 ? "note" : "notes"}.${result.failures.map((failure) => ` ${failure.name}: ${failure.message}`).join("")}`);
   }).catch(() => {});
+  const errorBlock = error && (
+          <ErrorMessage
+            error={error}
+            retry={() => {
+              setError(null);
+              refresh();
+              if (today && !payload)
+                act(async () =>
+                  showNote(
+                    await unwrap(
+                      api.notes.daily({ context: context(workspace.id) }),
+                    ),
+                  ),
+                ).catch(() => {});
+            }}
+          />
+        );
+  // Shown in the open page, or above the page list when none is open (after moving a
+  // page to Trash, restoring one or importing).
+  const noticeBar = notice && (
+    <div className="notebook-notice" role="status">
+      <span>{notice}</span>
+      <Tool label="Dismiss notification" icon={X} onClick={() => setNotice("")} />
+    </div>
+  );
   return (
     <div
       className={`notebook ${today ? "daily-notebook" : ""} ${payload ? "has-selection" : ""} ${pagesHidden && !today ? "pages-hidden" : ""}`}
@@ -1596,6 +1621,8 @@ export function Notebook({
             />
             </span>
           </div>
+          {!payload && !today && errorBlock}
+          {!payload && noticeBar}
           <div className="note-search">
             <Search size={16} />
             <input
@@ -1728,43 +1755,8 @@ export function Notebook({
             ))}
           </div>
         )}
-        {error && (
-          <ErrorMessage
-            error={error}
-            retry={() => {
-              setError(null);
-              refresh();
-              if (today && !payload)
-                act(async () =>
-                  showNote(
-                    await unwrap(
-                      api.notes.daily({ context: context(workspace.id) }),
-                    ),
-                  ),
-                ).catch(() => {});
-            }}
-          />
-        )}
-        {folderDialog && (
-          <FolderDialog
-            mode={folderDialog.mode}
-            folder={folderDialog.folder}
-            folders={folders.items}
-            parentPath={folderDialog.mode === "create" ? selectedFolder?.path : null}
-            close={() => setFolderDialog(null)}
-            submit={folderDialog.mode === "move" ? moveFolder : folderDialog.mode === "rename" ? renameFolder : createFolder}
-          />
-        )}
-        {notice && (
-          <div className="notebook-notice" role="status">
-            <span>{notice}</span>
-            <Tool
-              label="Dismiss notification"
-              icon={X}
-              onClick={() => setNotice("")}
-            />
-          </div>
-        )}
+        {(payload || today) && errorBlock}
+        {(payload || today) && noticeBar}
         {payload?.kind === "graph" ? (
           <GraphView
             graph={payload.graph}
@@ -1873,6 +1865,16 @@ export function Notebook({
           </div>
         )}
       </div>
+      {folderDialog && (
+        <FolderDialog
+          mode={folderDialog.mode}
+          folder={folderDialog.folder}
+          folders={folders.items}
+          parentPath={folderDialog.mode === "create" ? selectedFolder?.path : null}
+          close={() => setFolderDialog(null)}
+          submit={folderDialog.mode === "move" ? moveFolder : folderDialog.mode === "rename" ? renameFolder : createFolder}
+        />
+      )}
     </div>
   );
 }

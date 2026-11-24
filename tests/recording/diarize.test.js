@@ -233,7 +233,9 @@ test("download needs model permission, publishes only verified files, and keeps 
     const writes = Object.entries(files)
       .map(([p, body]) => `mkdir -p "$3/speaker-diarization/${path.dirname(p)}" && printf '%s' '${bad && p === "config.json" ? "tampered" : body}' > "$3/speaker-diarization/${p}"`)
       .join("\n");
-    fs.writeFileSync(file, `#!/bin/sh\n[ "$1" = download ] || exit 9\n${writes}\necho '{"ok":true}'\n`, { mode: 0o755 });
+    // Upstream extras (provenance.json, a stray folder) must not fail the install.
+    const extras = `printf '{}' > "$3/speaker-diarization/provenance.json"\nmkdir -p "$3/speaker-diarization/.cache/x" && printf 'x' > "$3/speaker-diarization/.cache/x/y"`;
+    fs.writeFileSync(file, `#!/bin/sh\n[ "$1" = download ] || exit 9\n${writes}\n${extras}\necho '{"ok":true}'\n`, { mode: 0o755 });
     return file;
   };
   const strict = new Policy({ strict: true });
@@ -253,6 +255,8 @@ test("download needs model permission, publishes only verified files, and keeps 
   assert.equal(await runtime.download(), true);
   assert.equal(runtime.ready(), true);
   assert.deepEqual(fs.readdirSync(root), ["speaker-diarization"]);
+  assert.equal(fs.existsSync(path.join(runtime.modelDirectory, "provenance.json")), false, "unpinned files are dropped");
+  assert.equal(fs.existsSync(path.join(runtime.modelDirectory, ".cache")), false);
   const fresh = new DiarizationRuntime({ binary: helper(false), root, manifest });
   assert.equal(fresh.verify(), true, "a restart re-verifies before use");
 });

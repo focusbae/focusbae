@@ -110,6 +110,28 @@ function verifyTree(directory, manifest) {
   return true;
 }
 
+// Removes everything the manifest does not pin from a freshly downloaded tree.
+// The upstream repository may add files (it added provenance.json in Nov 2026);
+// only pinned files are kept, and verifyTree still checks each one's hash.
+function pruneUnpinned(directory, manifest) {
+  if (!files.inspect(directory, true)) return;
+  const pinned = new Set(manifest.files.map((file) => file.path));
+  const keep = new Set([...pinned].flatMap((file) => {
+    const parents = [];
+    for (let dir = path.dirname(file); dir !== "."; dir = path.dirname(dir)) parents.push(dir);
+    return parents;
+  }));
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      const relative = path.relative(directory, full);
+      if (entry.isDirectory() && !entry.isSymbolicLink() && keep.has(relative)) walk(full);
+      else if (!(entry.isFile() && pinned.has(relative))) fs.rmSync(full, { recursive: true, force: true });
+    }
+  };
+  walk(directory);
+}
+
 // A pinned multi-file model installed under <root>/<manifest.name>. Downloads and
 // imports go to private staging and are published only when every file verifies.
 class FluidModel extends EventEmitter {
@@ -207,7 +229,9 @@ class FluidModel extends EventEmitter {
       } finally {
         permission.release();
       }
-      return path.join(staging, this.manifest.name);
+      const downloaded = path.join(staging, this.manifest.name);
+      pruneUnpinned(downloaded, this.manifest);
+      return downloaded;
     });
   }
 
@@ -224,4 +248,4 @@ class FluidModel extends EventEmitter {
   }
 }
 
-module.exports = { FluidModel, run, verifyTree, whilePermitted, BIN };
+module.exports = { FluidModel, run, verifyTree, pruneUnpinned, whilePermitted, BIN };
